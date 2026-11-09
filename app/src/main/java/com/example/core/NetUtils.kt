@@ -1,6 +1,10 @@
 package com.example.core
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.NetworkInterface
 
 /**
@@ -93,4 +97,47 @@ object NetUtils {
         val addresses = getLocalIpv4Addresses()
         return addresses.firstOrNull { !it.isTailscale }?.ip
     }
+
+    // Linux address flags (from if_addr.h), exposed by LinkAddress.getFlags()
+    private const val IFA_F_TEMPORARY = 0x01
+    private const val IFA_F_DEPRECATED = 0x20
+
+    /** True for a global unicast IPv6 address (2000::/3). */
+    fun isGlobalIpv6(addr: Inet6Address): Boolean =
+        (addr.address[0].toInt() and 0xE0) == 0x20
+
+    /**
+     * The phone's stable public IPv6 address on Wi-Fi/Ethernet, or null if it has none.
+     * Temporary (privacy) addresses are skipped because they change every few hours.
+     * The Tailscale VPN network is ignored.
+     */
+    @Suppress("DEPRECATION")
+    fun findGlobalIpv6(context: Context): String? {
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            var fallback: String? = null
+            for (network in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(network) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                    !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                ) continue
+                val lp = cm.getLinkProperties(network) ?: continue
+                for (la in lp.linkAddresses) {
+                    val addr = la.address as? Inet6Address ?: continue
+                    if (!isGlobalIpv6(addr)) continue
+                    val text = addr.hostAddress?.substringBefore('%') ?: continue
+                    if (la.flags and (IFA_F_TEMPORARY or IFA_F_DEPRECATED) == 0) return text
+                    if (fallback == null) fallback = text
+                }
+            }
+            return fallback
+        } catch (_: Exception) {
+            return null
+        }
+    }
+
+    /** Puts IPv6 literals in brackets for use in a URL: 2409::1 -> [2409::1]. */
+    fun hostForUrl(host: String): String =
+        if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
 }

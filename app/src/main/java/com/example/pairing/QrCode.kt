@@ -13,11 +13,19 @@ data class PairingInfo(
     val name: String,
     val host: String,
     val port: Int,
-    val token: String
+    val token: String,
+    /** Internet (IPv6/HTTPS) address: DuckDNS name or IPv6 literal; blank when off */
+    val remoteHost: String = "",
+    val remotePort: Int = 8443,
+    /** SHA-256 of the camera's HTTPS certificate, pinned by the viewer */
+    val certFp: String = ""
 ) {
     fun toUriString(): String {
         val encodedName = URLEncoder.encode(name, "UTF-8")
-        return "homecam://pair?name=$encodedName&host=$host&port=$port&t=$token"
+        val base = "homecam://pair?name=$encodedName&host=$host&port=$port&t=$token"
+        return if (remoteHost.isNotBlank() && certFp.isNotBlank()) {
+            base + "&rh=" + URLEncoder.encode(remoteHost, "UTF-8") + "&rp=$remotePort&fp=$certFp"
+        } else base
     }
 
     companion object {
@@ -31,7 +39,15 @@ data class PairingInfo(
                     val host = params["host"] ?: return null
                     val port = params["port"]?.toIntOrNull() ?: 8080
                     val token = params["t"] ?: return null
-                    return PairingInfo(name, host, port, token)
+                    return PairingInfo(
+                        name = name,
+                        host = host,
+                        port = port,
+                        token = token,
+                        remoteHost = params["rh"].orEmpty(),
+                        remotePort = params["rp"]?.toIntOrNull() ?: 8443,
+                        certFp = params["fp"].orEmpty().lowercase()
+                    )
                 }
 
                 // Also support http(s) URL fallback like http://100.x.x.x:8080/stream.mjpg?t=...

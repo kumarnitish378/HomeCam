@@ -32,6 +32,10 @@ class SettingsRepository(private val context: Context) {
         val KEY_MOTION_ENABLED = booleanPreferencesKey("motion_enabled")
         val KEY_MOTION_COOLDOWN_SEC = intPreferencesKey("motion_cooldown_sec")
         val KEY_TAILSCALE_ONLY = booleanPreferencesKey("tailscale_only")
+        val KEY_REMOTE_ENABLED = booleanPreferencesKey("remote_ipv6_enabled")
+        val KEY_REMOTE_PORT = intPreferencesKey("remote_ipv6_port")
+        val KEY_DUCK_DOMAIN = stringPreferencesKey("duckdns_domain")
+        val KEY_DUCK_TOKEN = stringPreferencesKey("duckdns_token")
         val KEY_SAVED_CAMERAS_JSON = stringPreferencesKey("saved_cameras_json")
     }
 
@@ -47,7 +51,13 @@ class SettingsRepository(private val context: Context) {
         val motionSensitivity: Float = 0.02f,
         val motionEnabled: Boolean = true,
         val motionCooldownSec: Int = 30,
-        val tailscaleOnly: Boolean = false
+        val tailscaleOnly: Boolean = false,
+        /** Internet access over IPv6 + HTTPS, without Tailscale */
+        val remoteEnabled: Boolean = false,
+        val remotePort: Int = 8443,
+        /** Optional DuckDNS name (without .duckdns.org) kept pointing at the phone's IPv6 */
+        val duckDomain: String = "",
+        val duckToken: String = ""
     )
 
     val appMode: Flow<String> = context.dataStore.data.map { prefs ->
@@ -67,7 +77,11 @@ class SettingsRepository(private val context: Context) {
             motionSensitivity = prefs[KEY_MOTION_SENSITIVITY] ?: 0.02f,
             motionEnabled = prefs[KEY_MOTION_ENABLED] ?: true,
             motionCooldownSec = prefs[KEY_MOTION_COOLDOWN_SEC] ?: 30,
-            tailscaleOnly = prefs[KEY_TAILSCALE_ONLY] ?: false
+            tailscaleOnly = prefs[KEY_TAILSCALE_ONLY] ?: false,
+            remoteEnabled = prefs[KEY_REMOTE_ENABLED] ?: false,
+            remotePort = prefs[KEY_REMOTE_PORT] ?: 8443,
+            duckDomain = prefs[KEY_DUCK_DOMAIN] ?: "",
+            duckToken = prefs[KEY_DUCK_TOKEN] ?: ""
         )
     }
 
@@ -112,7 +126,11 @@ class SettingsRepository(private val context: Context) {
         motionSensitivity: Float? = null,
         tailscaleOnly: Boolean? = null,
         motionEnabled: Boolean? = null,
-        motionCooldownSec: Int? = null
+        motionCooldownSec: Int? = null,
+        remoteEnabled: Boolean? = null,
+        remotePort: Int? = null,
+        duckDomain: String? = null,
+        duckToken: String? = null
     ) {
         context.dataStore.edit { prefs ->
             cameraName?.let { prefs[KEY_CAMERA_NAME] = it }
@@ -126,6 +144,10 @@ class SettingsRepository(private val context: Context) {
             tailscaleOnly?.let { prefs[KEY_TAILSCALE_ONLY] = it }
             motionEnabled?.let { prefs[KEY_MOTION_ENABLED] = it }
             motionCooldownSec?.let { prefs[KEY_MOTION_COOLDOWN_SEC] = it }
+            remoteEnabled?.let { prefs[KEY_REMOTE_ENABLED] = it }
+            remotePort?.let { prefs[KEY_REMOTE_PORT] = it }
+            duckDomain?.let { prefs[KEY_DUCK_DOMAIN] = it }
+            duckToken?.let { prefs[KEY_DUCK_TOKEN] = it }
         }
     }
 

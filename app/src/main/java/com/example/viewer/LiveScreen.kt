@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnLock
@@ -77,9 +78,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -124,28 +124,40 @@ fun LiveScreen(
         }
     }
 
+    // How we currently reach the camera (Home Wi-Fi, Tailscale or Internet IPv6)
+    var activeRoute by remember { mutableStateOf<Route?>(null) }
+    var activeBaseUrl by remember { mutableStateOf(camera.baseUrl) }
+
     // Stream frames using MjpegClient. Runs only while screen is active!
+    // Each attempt picks the first route that answers (LAN/Tailscale first, then internet),
+    // so walking out of the house switches to IPv6 on the next reconnect.
     LaunchedEffect(camera.id) {
-        val client = MjpegClient()
         isConnecting = true
         isDisconnected = false
-
-        client.streamFrames(camera.streamUrl, camera.token) { fps ->
-            receivedFps = fps
+        while (true) {
+            val endpoint = repository.resolveEndpoint(camera)
+            if (endpoint != null) {
+                activeRoute = endpoint.route
+                activeBaseUrl = endpoint.baseUrl
+                try {
+                    MjpegClient(endpoint.streamClient())
+                        .streamFrames("${endpoint.baseUrl}/stream.mjpg", camera.token) { fps ->
+                            receivedFps = fps
+                        }
+                        .collect { frame ->
+                            latestFrame = frame
+                            isConnecting = false
+                            isDisconnected = false
+                        }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // stream dropped; fall through and reconnect
+                }
+            }
+            isDisconnected = true
+            delay(2000) // Retry every 2s on disconnect
         }
-            .retryWhen { cause, attempt ->
-                isDisconnected = true
-                delay(2000) // Retry every 2s on disconnect
-                true
-            }
-            .catch {
-                isDisconnected = true
-            }
-            .collect { frame ->
-                latestFrame = frame
-                isConnecting = false
-                isDisconnected = false
-            }
     }
 
     // Periodically poll /status for battery, temp, and motion
@@ -178,7 +190,7 @@ fun LiveScreen(
                                 Text(camera.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             }
                             Text(
-                                text = "${if (camera.isTailscale) "Tailscale (Remote Encrypted)" else "Home LAN"} · ${camera.host}:${camera.port}",
+                                text = "${activeRoute?.label ?: "Connecting"} · ${activeBaseUrl.substringAfter("://")}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -307,8 +319,12 @@ fun LiveScreen(
 
                 // Network Badge
                 HudBadge(
-                    text = if (camera.isTailscale) "Tailscale" else "LAN",
-                    icon = if (camera.isTailscale) Icons.Default.VpnLock else Icons.Default.Wifi
+                    text = activeRoute?.label ?: "…",
+                    icon = when (activeRoute) {
+                        Route.TAILSCALE -> Icons.Default.VpnLock
+                        Route.INTERNET -> Icons.Default.Public
+                        else -> Icons.Default.Wifi
+                    }
                 )
 
                 // Battery Badge
@@ -467,9 +483,14 @@ fun LiveScreen(
                     fontWeight = FontWeight.Bold
                 )
 
-                InfoRow("Stream URL", camera.streamUrl)
-                InfoRow("Host & Port", "${camera.host}:${camera.port}")
-                InfoRow("Network Route", if (camera.isTailscale) "Tailscale Encrypted CGNAT (100.x)" else "Local Wi-Fi Network")
+                InfoRow("Stream URL", "$activeBaseUrl/stream.mjpg")
+                InfoRow("Network Route", when (activeRoute) {
+                    Route.TAILSCALE -> "Tailscale (encrypted)"
+                    Route.INTERNET -> "Internet IPv6 (HTTPS, pinned)"
+                    Route.LAN -> "Home Wi-Fi"
+                    null -> "Not connected"
+                })
+                InfoRow("Internet (IPv6) Address", if (camera.hasRemote) camera.remoteHost else "Not set up")
                 InfoRow("Connected Viewers", "${cameraStatus.viewers} devices")
                 InfoRow("Caster Camera FPS", "${cameraStatus.fps} fps")
                 InfoRow("Received FPS", "$receivedFps fps")

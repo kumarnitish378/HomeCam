@@ -18,13 +18,14 @@ import java.util.concurrent.TimeUnit
 /**
  * Streams MJPEG from HomeCam over HTTP using OkHttp and parses multipart JPEG parts into Bitmaps.
  */
-class MjpegClient {
-
-    private val client = OkHttpClient.Builder()
+class MjpegClient(
+    /** Client for the chosen route (plain HTTP, or HTTPS pinned to the camera's certificate). */
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS) // No frame for 10s = dropped connection
         .retryOnConnectionFailure(true)
         .build()
+) {
 
     fun streamFrames(
         url: String,

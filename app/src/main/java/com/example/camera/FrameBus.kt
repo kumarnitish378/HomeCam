@@ -57,6 +57,13 @@ object FrameBus {
     /** Recent motion snapshots */
     val recentMotionSnapshots = MutableStateFlow<List<MotionRecord>>(emptyList())
 
+    /** Internet (IPv6 + HTTPS) access state, published by the service */
+    val remoteEnabled = MutableStateFlow(false)
+    val remoteHost = MutableStateFlow<String?>(null)   // DuckDNS name or current global IPv6
+    val remotePort = MutableStateFlow(8443)
+    val certFingerprint = MutableStateFlow<String?>(null)
+    val remoteError = MutableStateFlow<String?>(null)
+
     /** Last camera error message if any */
     val cameraError = MutableStateFlow<String?>(null)
 }

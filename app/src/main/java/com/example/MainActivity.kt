@@ -202,7 +202,10 @@ fun MainAppContent(
                                         name = pairing.name,
                                         host = pairing.host,
                                         port = pairing.port,
-                                        token = pairing.token
+                                        token = pairing.token,
+                                        remoteHost = pairing.remoteHost,
+                                        remotePort = pairing.remotePort,
+                                        certFp = pairing.certFp
                                     )
                                     cameraRepo.addCamera(newCamera)
                                     selectedCameraForLive = newCamera

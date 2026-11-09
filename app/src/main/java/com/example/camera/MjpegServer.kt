@@ -109,6 +109,10 @@ class MjpegServer(
                         append("\"isHeatThrottled\":${FrameBus.isHeatThrottled.value},")
                         append("\"torchOn\":${FrameBus.torchEnabled.value},")
                         append("\"motionEnabled\":${FrameBus.motionEnabled.value},")
+                        append("\"remoteEnabled\":${FrameBus.remoteEnabled.value},")
+                        append("\"remoteHost\":\"${escapeJson(FrameBus.remoteHost.value.orEmpty())}\",")
+                        append("\"remotePort\":${FrameBus.remotePort.value},")
+                        append("\"certFp\":\"${FrameBus.certFingerprint.value.orEmpty()}\",")
                         append("\"lensFacing\":\"${FrameBus.lensFacing.value}\"")
                         append("}")
                     }

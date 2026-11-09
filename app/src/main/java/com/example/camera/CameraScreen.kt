@@ -91,6 +91,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.core.NetUtils
+import com.example.core.TlsIdentity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.material.icons.filled.Public
 import com.example.core.SettingsRepository
 import com.example.pairing.PairingInfo
 import com.example.pairing.QrCodeGenerator
@@ -119,6 +123,7 @@ fun CameraScreen(
     val lastMotion by FrameBus.lastMotionTimestamp.collectAsState()
     val cameraError by FrameBus.cameraError.collectAsState()
     val currentLensFacing by FrameBus.lensFacing.collectAsState()
+    val remoteError by FrameBus.remoteError.collectAsState()
 
     val config by settingsRepo.cameraConfig.collectAsState(initial = SettingsRepository.CameraConfig())
 
@@ -158,12 +163,32 @@ fun CameraScreen(
         }
     }
 
-    val pairingInfo = remember(config.cameraName, selectedHostForQr, config.port, token) {
+    // Internet (IPv6) access: address + certificate fingerprint for the QR code
+    var remoteHostForQr by remember { mutableStateOf("") }
+    var certFp by remember { mutableStateOf("") }
+    LaunchedEffect(config.remoteEnabled, config.duckDomain) {
+        while (config.remoteEnabled) {
+            certFp = withContext(Dispatchers.IO) {
+                runCatching { TlsIdentity.fingerprint() }.getOrDefault("")
+            }
+            val ipv6 = withContext(Dispatchers.IO) { NetUtils.findGlobalIpv6(context) }
+            remoteHostForQr = if (config.duckDomain.isNotBlank()) {
+                DuckDnsUpdater.fullName(config.duckDomain)
+            } else ipv6.orEmpty()
+            delay(30_000)
+        }
+        remoteHostForQr = ""
+    }
+
+    val pairingInfo = remember(config.cameraName, selectedHostForQr, config.port, token, remoteHostForQr, certFp, config.remotePort) {
         PairingInfo(
             name = config.cameraName,
             host = selectedHostForQr,
             port = config.port,
-            token = token
+            token = token,
+            remoteHost = remoteHostForQr,
+            remotePort = config.remotePort,
+            certFp = certFp
         )
     }
 
@@ -543,6 +568,54 @@ fun CameraScreen(
                 }
             }
 
+            // Internet (IPv6) access status
+            if (config.remoteEnabled) {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (remoteError != null) {
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Internet access (IPv6, no Tailscale)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (remoteHostForQr.isNotBlank()) {
+                                "https://${NetUtils.hostForUrl(remoteHostForQr)}:${config.remotePort}"
+                            } else {
+                                "No public IPv6 address found on Wi-Fi yet."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = when {
+                                !isStreaming -> "Starts with the camera service."
+                                remoteError != null -> remoteError!!
+                                else -> "Included in the pairing QR. Allow inbound TCP ${config.remotePort} " +
+                                    "for this phone in the router's IPv6 firewall."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isStreaming && remoteError != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // Battery Optimization Alert Banner
             AnimatedVisibility(visible = showBatteryOptimizationBanner) {
                 Card(
@@ -637,7 +710,10 @@ fun CameraScreen(
                         quality = updatedConfig.jpegQuality,
                         lensFacing = updatedConfig.lensFacing,
                         motionSensitivity = updatedConfig.motionSensitivity,
-                        tailscaleOnly = updatedConfig.tailscaleOnly
+                        tailscaleOnly = updatedConfig.tailscaleOnly,
+                        remoteEnabled = updatedConfig.remoteEnabled,
+                        duckDomain = updatedConfig.duckDomain,
+                        duckToken = updatedConfig.duckToken
                     )
                     showSettingsDialog = false
                     Toast.makeText(context, "Settings saved. If streaming, restart to apply network changes.", Toast.LENGTH_SHORT).show()
@@ -746,6 +822,9 @@ fun CameraSettingsDialog(
     var quality by remember { mutableIntStateOf(config.jpegQuality) }
     var sensitivity by remember { mutableStateOf(config.motionSensitivity) }
     var tailscaleOnly by remember { mutableStateOf(config.tailscaleOnly) }
+    var remoteEnabled by remember { mutableStateOf(config.remoteEnabled) }
+    var duckDomain by remember { mutableStateOf(config.duckDomain) }
+    var duckToken by remember { mutableStateOf(config.duckToken) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -817,6 +896,50 @@ fun CameraSettingsDialog(
                         onCheckedChange = { tailscaleOnly = it }
                     )
                 }
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Internet access (IPv6)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Watch from anywhere without Tailscale. Encrypted HTTPS on port ${config.remotePort}; " +
+                                "the viewer's network also needs IPv6.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = remoteEnabled,
+                        onCheckedChange = { remoteEnabled = it }
+                    )
+                }
+
+                if (remoteEnabled) {
+                    Text(
+                        "Optional: a free DuckDNS name keeps working when your router's IPv6 address changes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = duckDomain,
+                        onValueChange = { duckDomain = it.trim() },
+                        label = { Text("DuckDNS name (e.g. nitishcam)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = duckToken,
+                        onValueChange = { duckToken = it.trim() },
+                        label = { Text("DuckDNS token") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
             }
         },
         confirmButton = {
@@ -829,7 +952,10 @@ fun CameraSettingsDialog(
                         maxFps = fps,
                         jpegQuality = quality,
                         motionSensitivity = sensitivity,
-                        tailscaleOnly = tailscaleOnly
+                        tailscaleOnly = tailscaleOnly,
+                        remoteEnabled = remoteEnabled,
+                        duckDomain = duckDomain.removeSuffix(".duckdns.org"),
+                        duckToken = duckToken
                     )
                 )
             }) {

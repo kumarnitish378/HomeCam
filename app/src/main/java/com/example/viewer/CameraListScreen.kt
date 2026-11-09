@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VpnLock
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -348,26 +349,33 @@ fun CameraCardItem(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // Route actually in use when online; otherwise the paired address type
+                val route = status.route ?: if (camera.isTailscale) Route.TAILSCALE else Route.LAN
+                val routeTint = if (route == Route.LAN) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = if (camera.isTailscale) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                    color = if (route == Route.LAN) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            if (camera.isTailscale) Icons.Default.VpnLock else Icons.Default.Wifi,
+                            when (route) {
+                                Route.TAILSCALE -> Icons.Default.VpnLock
+                                Route.INTERNET -> Icons.Default.Public
+                                Route.LAN -> Icons.Default.Wifi
+                            },
                             contentDescription = null,
                             modifier = Modifier.size(12.dp),
-                            tint = if (camera.isTailscale) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                            tint = routeTint
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (camera.isTailscale) "Tailscale" else "LAN",
+                            text = route.label,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (camera.isTailscale) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                            color = routeTint
                         )
                     }
                 }

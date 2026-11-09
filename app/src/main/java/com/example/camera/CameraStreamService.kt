@@ -29,12 +29,16 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.example.MainActivity
 import com.example.R
+import com.example.core.NetUtils
 import com.example.core.SettingsRepository
+import com.example.core.TlsIdentity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
 /**
@@ -61,6 +65,8 @@ class CameraStreamService : LifecycleService() {
     private var encoder = FrameEncoder(quality = 70, maxFps = 12)
     private var motionDetector: MotionDetector? = null
     private var server: MjpegServer? = null
+    private var remoteProxy: RemoteTlsProxy? = null
+    private var remoteJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var cameraProvider: ProcessCameraProvider? = null
@@ -155,6 +161,9 @@ class CameraStreamService : LifecycleService() {
 
         FrameBus.isStreaming.value = true
 
+        // 6b. Internet access over IPv6 + HTTPS (optional, no Tailscale needed)
+        remoteJob = lifecycleScope.launch { runRemoteAccess() }
+
         // 7. Observe settings from DataStore
         lifecycleScope.launch {
             settingsRepo?.cameraConfig?.collect { config ->
@@ -190,6 +199,66 @@ class CameraStreamService : LifecycleService() {
             }
         }
     }
+
+    /**
+     * Opens the HTTPS port when "Internet access (IPv6)" is on, then every minute refreshes
+     * the phone's public IPv6 address and, if configured, the DuckDNS name.
+     */
+    private suspend fun runRemoteAccess() {
+        val config = settingsRepo?.cameraConfig?.first() ?: return
+        FrameBus.remoteEnabled.value = config.remoteEnabled
+        FrameBus.remotePort.value = config.remotePort
+        if (!config.remoteEnabled) {
+            FrameBus.remoteHost.value = null
+            FrameBus.remoteError.value = null
+            return
+        }
+
+        val opened = withContext(Dispatchers.IO) {
+            try {
+                FrameBus.certFingerprint.value = TlsIdentity.fingerprint()
+                remoteProxy = RemoteTlsProxy(TlsIdentity.serverContext(), config.remotePort, port)
+                    .also { it.start() }
+                true
+            } catch (e: Exception) {
+                FrameBus.remoteError.value = "Couldn't open HTTPS port ${config.remotePort}: ${e.message}"
+                false
+            }
+        }
+        if (!opened) return
+
+        val useDuck = config.duckDomain.isNotBlank() && config.duckToken.isNotBlank()
+        var lastSentIpv6: String? = null
+        var lastSentAt = 0L
+        while (currentCoroutineContextActive()) {
+            val ipv6 = withContext(Dispatchers.IO) { NetUtils.findGlobalIpv6(applicationContext) }
+            FrameBus.remoteHost.value = when {
+                useDuck -> DuckDnsUpdater.fullName(config.duckDomain)
+                else -> ipv6
+            }
+            var error: String? = if (ipv6 == null) {
+                "No public IPv6 address on Wi-Fi. Check that the router has IPv6 enabled."
+            } else null
+
+            val now = System.currentTimeMillis()
+            if (useDuck && ipv6 != null && (ipv6 != lastSentIpv6 || now - lastSentAt > 30 * 60_000L)) {
+                val ok = withContext(Dispatchers.IO) {
+                    DuckDnsUpdater.update(config.duckDomain, config.duckToken, ipv6)
+                }
+                if (ok) {
+                    lastSentIpv6 = ipv6
+                    lastSentAt = now
+                } else {
+                    error = "DuckDNS update failed. Check the domain and token."
+                }
+            }
+            FrameBus.remoteError.value = error
+            delay(60_000)
+        }
+    }
+
+    private suspend fun currentCoroutineContextActive(): Boolean =
+        kotlinx.coroutines.currentCoroutineContext().isActive
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
@@ -441,6 +510,12 @@ class CameraStreamService : LifecycleService() {
             server = null
         } catch (_: Exception) {
         }
+
+        remoteJob?.cancel()
+        remoteProxy?.stop()
+        remoteProxy = null
+        FrameBus.remoteEnabled.value = false
+        FrameBus.remoteHost.value = null
 
         try {
             wakeLock?.let {
