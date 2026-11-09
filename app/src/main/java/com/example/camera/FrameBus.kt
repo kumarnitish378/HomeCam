@@ -27,6 +27,9 @@ object FrameBus {
     /** Service streaming active state */
     val isStreaming = MutableStateFlow(false)
 
+    /** Whether motion detection is currently on */
+    val motionEnabled = MutableStateFlow(true)
+
     /** Timestamp of last detected motion event */
     val lastMotionTimestamp = MutableStateFlow(0L)
 

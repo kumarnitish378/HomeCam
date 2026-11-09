@@ -52,7 +52,16 @@ data class CameraStatus(
     val isHeatThrottled: Boolean = false,
     val torchOn: Boolean = false,
     val lensFacing: String = "BACK",
+    val motionEnabled: Boolean = true,
     val errorMessage: String? = null
+)
+
+/** Motion detection settings of a camera, as served by /config/motion. */
+data class MotionConfig(
+    val enabled: Boolean = true,
+    /** Fraction of the image that must change to trigger (0.02 = 2%). */
+    val sensitivity: Float = 0.02f,
+    val cooldownSec: Int = 30
 )
 
 class CameraRepository(private val settingsRepo: SettingsRepository) {
@@ -151,7 +160,8 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
                         isCharging = json.optBoolean("isCharging", false),
                         isHeatThrottled = json.optBoolean("isHeatThrottled", false),
                         torchOn = json.optBoolean("torchOn", false),
-                        lensFacing = json.optString("lensFacing", "BACK")
+                        lensFacing = json.optString("lensFacing", "BACK"),
+                        motionEnabled = json.optBoolean("motionEnabled", true)
                     )
                 } else {
                     CameraStatus(
@@ -194,5 +204,52 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
         } catch (_: Exception) {
             false
         }
+    }
+
+    suspend fun fetchMotionConfig(camera: CameraItem): MotionConfig? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("${camera.baseUrl}/config/motion")
+                .header("Authorization", "Bearer ${camera.token}")
+                .get()
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) parseMotionConfig(response.body?.string().orEmpty()) else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Sends new motion settings; returns the settings the camera now uses, or null on failure. */
+    suspend fun updateMotionConfig(camera: CameraItem, config: MotionConfig): MotionConfig? =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "${camera.baseUrl}/config/motion" +
+                    "?enabled=${if (config.enabled) 1 else 0}" +
+                    "&sensitivity=${config.sensitivity}" +
+                    "&cooldown=${config.cooldownSec}"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("Authorization", "Bearer ${camera.token}")
+                    .post(ByteArray(0).toRequestBody())
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) parseMotionConfig(response.body?.string().orEmpty()) else null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+    private fun parseMotionConfig(body: String): MotionConfig? = try {
+        val json = JSONObject(body)
+        MotionConfig(
+            enabled = json.optBoolean("enabled", true),
+            sensitivity = json.optDouble("sensitivity", 0.02).toFloat(),
+            cooldownSec = json.optInt("cooldownSec", 30)
+        )
+    } catch (_: Exception) {
+        null
     }
 }

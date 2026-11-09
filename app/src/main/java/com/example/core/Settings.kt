@@ -29,6 +29,8 @@ class SettingsRepository(private val context: Context) {
         val KEY_JPEG_QUALITY = intPreferencesKey("jpeg_quality")
         val KEY_LENS_FACING = stringPreferencesKey("lens_facing") // "BACK", "FRONT"
         val KEY_MOTION_SENSITIVITY = floatPreferencesKey("motion_sensitivity") // 0.01f to 0.10f
+        val KEY_MOTION_ENABLED = booleanPreferencesKey("motion_enabled")
+        val KEY_MOTION_COOLDOWN_SEC = intPreferencesKey("motion_cooldown_sec")
         val KEY_TAILSCALE_ONLY = booleanPreferencesKey("tailscale_only")
         val KEY_SAVED_CAMERAS_JSON = stringPreferencesKey("saved_cameras_json")
     }
@@ -43,6 +45,8 @@ class SettingsRepository(private val context: Context) {
         val jpegQuality: Int = 70,
         val lensFacing: String = "BACK",
         val motionSensitivity: Float = 0.02f,
+        val motionEnabled: Boolean = true,
+        val motionCooldownSec: Int = 30,
         val tailscaleOnly: Boolean = false
     )
 
@@ -61,6 +65,8 @@ class SettingsRepository(private val context: Context) {
             jpegQuality = prefs[KEY_JPEG_QUALITY] ?: 70,
             lensFacing = prefs[KEY_LENS_FACING] ?: "BACK",
             motionSensitivity = prefs[KEY_MOTION_SENSITIVITY] ?: 0.02f,
+            motionEnabled = prefs[KEY_MOTION_ENABLED] ?: true,
+            motionCooldownSec = prefs[KEY_MOTION_COOLDOWN_SEC] ?: 30,
             tailscaleOnly = prefs[KEY_TAILSCALE_ONLY] ?: false
         )
     }
@@ -104,7 +110,9 @@ class SettingsRepository(private val context: Context) {
         quality: Int? = null,
         lensFacing: String? = null,
         motionSensitivity: Float? = null,
-        tailscaleOnly: Boolean? = null
+        tailscaleOnly: Boolean? = null,
+        motionEnabled: Boolean? = null,
+        motionCooldownSec: Int? = null
     ) {
         context.dataStore.edit { prefs ->
             cameraName?.let { prefs[KEY_CAMERA_NAME] = it }
@@ -116,6 +124,8 @@ class SettingsRepository(private val context: Context) {
             lensFacing?.let { prefs[KEY_LENS_FACING] = it }
             motionSensitivity?.let { prefs[KEY_MOTION_SENSITIVITY] = it }
             tailscaleOnly?.let { prefs[KEY_TAILSCALE_ONLY] = it }
+            motionEnabled?.let { prefs[KEY_MOTION_ENABLED] = it }
+            motionCooldownSec?.let { prefs[KEY_MOTION_COOLDOWN_SEC] = it }
         }
     }
 

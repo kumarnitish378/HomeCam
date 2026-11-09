@@ -34,9 +34,11 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnLock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -46,7 +48,9 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -81,6 +85,7 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,6 +114,7 @@ fun LiveScreen(
     var offsetY by remember { mutableFloatStateOf(0f) }
 
     var showInfoSheet by remember { mutableStateOf(false) }
+    var showMotionSheet by remember { mutableStateOf(false) }
 
     BackHandler {
         if (isFullscreen) {
@@ -184,6 +190,9 @@ fun LiveScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = { showMotionSheet = true }) {
+                            Icon(Icons.Default.Tune, contentDescription = "Motion detection settings")
+                        }
                         IconButton(onClick = { showInfoSheet = true }) {
                             Icon(Icons.Default.Info, contentDescription = "Camera Details")
                         }
@@ -468,10 +477,147 @@ fun LiveScreen(
                 InfoRow("Battery Temperature", "${cameraStatus.temperature}°C")
                 InfoRow("Heat Protection Throttling", if (cameraStatus.isHeatThrottled) "ACTIVE (Cooling: 480p/5fps)" else "Normal")
                 InfoRow("Active Lens", cameraStatus.lensFacing)
+                InfoRow("Motion Detection", if (cameraStatus.motionEnabled) "On" else "Off")
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+    }
+
+    if (showMotionSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showMotionSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            MotionSettingsSheet(
+                camera = camera,
+                repository = repository,
+                onDone = { showMotionSheet = false }
+            )
+        }
+    }
+}
+
+/**
+ * Reads the camera's motion settings, lets the user change them, and sends them back.
+ * Sensitivity is shown as "% of the image that must change", where lower = more sensitive.
+ */
+@Composable
+fun MotionSettingsSheet(
+    camera: CameraItem,
+    repository: CameraRepository,
+    onDone: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var loaded by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var enabled by remember { mutableStateOf(true) }
+    var triggerPercent by remember { mutableFloatStateOf(2f) }   // 0.5 .. 10 %
+    var cooldownSec by remember { mutableFloatStateOf(30f) }     // 5 .. 300 s
+
+    LaunchedEffect(camera.id) {
+        val config = repository.fetchMotionConfig(camera)
+        if (config != null) {
+            enabled = config.enabled
+            triggerPercent = (config.sensitivity * 100f).coerceIn(0.5f, 10f)
+            cooldownSec = config.cooldownSec.toFloat().coerceIn(5f, 300f)
+        } else {
+            loadFailed = true
+        }
+        loaded = true
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text("Motion detection", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+
+        if (!loaded) {
+            CircularProgressIndicator()
+        } else if (loadFailed) {
+            Text(
+                "Couldn't read settings from ${camera.name}. Update the camera phone to the latest " +
+                    "HomeCam version, and check it is online.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Detect motion", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Save a snapshot and alert on the camera phone",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = { enabled = it })
+            }
+
+            Column {
+                Text(
+                    "Trigger when ${String.format(Locale.US, "%.1f", triggerPercent)}% of the image changes",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    "Lower = more sensitive (more alerts). Default 2%.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Slider(
+                    value = triggerPercent,
+                    onValueChange = { triggerPercent = (it * 2).roundToInt() / 2f }, // 0.5 % steps
+                    valueRange = 0.5f..10f,
+                    enabled = enabled
+                )
+            }
+
+            Column {
+                Text(
+                    "Wait ${cooldownSec.roundToInt()} s between alerts",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Slider(
+                    value = cooldownSec,
+                    onValueChange = { cooldownSec = ((it / 5f).roundToInt() * 5).toFloat() }, // 5 s steps
+                    valueRange = 5f..300f,
+                    enabled = enabled
+                )
+            }
+
+            Button(
+                onClick = {
+                    saving = true
+                    scope.launch {
+                        val result = repository.updateMotionConfig(
+                            camera,
+                            MotionConfig(
+                                enabled = enabled,
+                                sensitivity = triggerPercent / 100f,
+                                cooldownSec = cooldownSec.roundToInt()
+                            )
+                        )
+                        saving = false
+                        if (result != null) {
+                            Toast.makeText(context, "Motion settings saved on ${camera.name}", Toast.LENGTH_SHORT).show()
+                            onDone()
+                        } else {
+                            Toast.makeText(context, "Couldn't reach ${camera.name}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                enabled = !saving,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (saving) "Saving..." else "Save to camera")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 

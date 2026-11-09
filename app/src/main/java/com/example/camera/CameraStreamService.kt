@@ -139,13 +139,14 @@ class CameraStreamService : LifecycleService() {
         registerBatteryMonitor()
 
         // 5. Initialize motion detector
-        motionDetector = MotionDetector(threshold = 0.02f) { _, file ->
+        motionDetector = MotionDetector(threshold = 0.02f) { file ->
             postMotionNotification(file.name)
         }
 
         // 6. Start Ktor server
         server = MjpegServer(
             context = applicationContext,
+            settingsRepo = settingsRepo,
             port = port,
             token = token,
             cameraName = cameraName,
@@ -163,6 +164,9 @@ class CameraStreamService : LifecycleService() {
                     targetResolution = Size(config.resolutionWidth, config.resolutionHeight)
                 }
                 motionDetector?.threshold = config.motionSensitivity
+                motionDetector?.enabled = config.motionEnabled
+                motionDetector?.cooldownMs = config.motionCooldownSec * 1000L
+                FrameBus.motionEnabled.value = config.motionEnabled
                 currentLensFacing = if (config.lensFacing.equals("FRONT", ignoreCase = true)) {
                     CameraSelector.LENS_FACING_FRONT
                 } else {
@@ -229,15 +233,17 @@ class CameraStreamService : LifecycleService() {
         val analysis = ImageAnalysis.Builder()
             .setResolutionSelector(resolutionSelector)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            // YUV is the camera's native format: no RGBA conversion. CameraX rotates the
+            // frame for us, so the encoder never copies a Bitmap to rotate it.
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+            .setOutputImageRotationEnabled(true)
             .build()
 
         analysis.setAnalyzer(executor) { imageProxy ->
             imageProxy.use { image ->
-                val bitmap = encoder.toUprightBitmap(image) ?: return@use
-                val jpeg = encoder.toJpeg(bitmap)
-                FrameBus.latest.value = jpeg
-                motionDetector?.process(bitmap, applicationContext)
+                val frame = encoder.encode(image) ?: return@use
+                FrameBus.latest.value = frame.jpeg
+                motionDetector?.process(frame, applicationContext)
             }
         }
 

@@ -3,6 +3,7 @@ package com.example.camera
 import android.content.Context
 import com.example.core.AuthToken
 import com.example.core.NetUtils
+import com.example.core.SettingsRepository
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -22,6 +23,7 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import java.io.File
 
 /**
@@ -30,6 +32,7 @@ import java.io.File
  */
 class MjpegServer(
     private val context: Context,
+    private val settingsRepo: SettingsRepository?,
     private val port: Int,
     private val token: String,
     private val cameraName: String,
@@ -105,6 +108,7 @@ class MjpegServer(
                         append("\"isCharging\":${FrameBus.isCharging.value},")
                         append("\"isHeatThrottled\":${FrameBus.isHeatThrottled.value},")
                         append("\"torchOn\":${FrameBus.torchEnabled.value},")
+                        append("\"motionEnabled\":${FrameBus.motionEnabled.value},")
                         append("\"lensFacing\":\"${FrameBus.lensFacing.value}\"")
                         append("}")
                     }
@@ -134,6 +138,54 @@ class MjpegServer(
                     val facingParam = call.request.queryParameters["facing"]?.uppercase() ?: "BACK"
                     FrameBus.controlCommands.tryEmit("LENS_$facingParam")
                     call.respond(HttpStatusCode.NoContent)
+                }
+
+                // Motion detection settings: read
+                get("/config/motion") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@get
+                    }
+                    val repo = settingsRepo
+                    if (repo == null) {
+                        call.respond(HttpStatusCode.ServiceUnavailable, "Settings unavailable")
+                        return@get
+                    }
+                    call.respondText(motionConfigJson(repo), ContentType.Application.Json)
+                }
+
+                // Motion detection settings: change any of enabled / sensitivity / cooldown.
+                // Example: POST /config/motion?enabled=1&sensitivity=0.03&cooldown=60
+                // The service observes the settings store, so changes apply within a frame.
+                post("/config/motion") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@post
+                    }
+                    val repo = settingsRepo
+                    if (repo == null) {
+                        call.respond(HttpStatusCode.ServiceUnavailable, "Settings unavailable")
+                        return@post
+                    }
+                    val q = call.request.queryParameters
+                    val enabled = q["enabled"]?.let { it == "1" || it.equals("true", ignoreCase = true) }
+                    val sensitivity = q["sensitivity"]?.toFloatOrNull()
+                    val cooldown = q["cooldown"]?.toIntOrNull()
+                    if ((q["sensitivity"] != null && (sensitivity == null || sensitivity !in 0.005f..0.20f)) ||
+                        (q["cooldown"] != null && (cooldown == null || cooldown !in 5..600))
+                    ) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            "sensitivity must be 0.005-0.20, cooldown must be 5-600 seconds"
+                        )
+                        return@post
+                    }
+                    repo.updateCameraConfig(
+                        motionEnabled = enabled,
+                        motionSensitivity = sensitivity,
+                        motionCooldownSec = cooldown
+                    )
+                    call.respondText(motionConfigJson(repo), ContentType.Application.Json)
                 }
 
                 // Motion snapshots listing
@@ -224,6 +276,12 @@ class MjpegServer(
             AuthToken.recordAuthFailure(remoteAddress)
             return false
         }
+    }
+
+    private suspend fun motionConfigJson(repo: SettingsRepository): String {
+        val c = repo.cameraConfig.first()
+        return "{\"enabled\":${c.motionEnabled},\"sensitivity\":${c.motionSensitivity}," +
+            "\"cooldownSec\":${c.motionCooldownSec}}"
     }
 
     private fun escapeJson(str: String): String {
