@@ -16,8 +16,10 @@ android {
     applicationId = "com.aistudio.homecam.vxztqr"
     minSdk = 26
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    // CI passes these from the release tag (v1.2.3 -> 1.2.3) and the run number,
+    // so every release has a higher versionCode and the in-app updater can compare names.
+    versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
+    versionName = (project.findProperty("appVersionName") as String?) ?: "0.0.0-dev"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

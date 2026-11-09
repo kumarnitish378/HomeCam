@@ -1,6 +1,10 @@
 package com.example
 
 import android.Manifest
+import com.example.update.AppUpdater
+import com.example.update.UpdateHost
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableIntStateOf
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -120,6 +124,10 @@ fun MainAppContent(
     var viewerSubScreen by remember { mutableStateOf(ViewerSubScreen.LIST) }
     var selectedCameraForLive by remember { mutableStateOf<CameraItem?>(null) }
     var showManualAddDialogInScanner by remember { mutableStateOf(false) }
+
+    // Bumped by the "Check for updates" button; UpdateHost also checks once on start.
+    var updateCheckRequest by remember { mutableIntStateOf(0) }
+    UpdateHost(manualCheckRequest = updateCheckRequest)
 
     // Permissions launcher
     val permissionsLauncher = rememberLauncherForActivityResult(
@@ -256,6 +264,7 @@ fun MainAppContent(
             else -> {
                 // Initial Mode Selection Screen
                 ModePickerScreen(
+                    onCheckUpdates = { updateCheckRequest++ },
                     onSelectMode = { selected ->
                         if (selected == "CAMERA") {
                             requestCameraPermissions()
@@ -273,6 +282,7 @@ fun MainAppContent(
 
 @Composable
 fun ModePickerScreen(
+    onCheckUpdates: () -> Unit,
     onSelectMode: (String) -> Unit
 ) {
     Scaffold(
@@ -355,6 +365,12 @@ fun ModePickerScreen(
                 primaryActionText = "Use as Viewer",
                 onClick = { onSelectMode("VIEWER") }
             )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            TextButton(onClick = onCheckUpdates) {
+                Text("Version ${AppUpdater.currentVersion} · Check for updates")
+            }
         }
     }
 }

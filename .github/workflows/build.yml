@@ -59,11 +59,21 @@ jobs:
 
       - name: Build Debug APK
         run: |
+          # Version: release tag v1.2.3 -> versionName 1.2.3; other builds -> 0.0.0-dev.<run>.
+          # versionCode = run number, so it always increases and updates install cleanly.
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION_NAME="${{ github.event.release.tag_name }}"
+            VERSION_NAME="${VERSION_NAME#v}"
+          else
+            VERSION_NAME="0.0.0-dev.${{ github.run_number }}"
+          fi
+          ARGS="-PappVersionName=$VERSION_NAME -PappVersionCode=${{ github.run_number }}"
+          echo "Building HomeCam $VERSION_NAME (code ${{ github.run_number }})"
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            ./gradlew :app:assembleDebug --stacktrace
+            ./gradlew :app:assembleDebug $ARGS --stacktrace
           else
-            gradle :app:assembleDebug --stacktrace
+            gradle :app:assembleDebug $ARGS --stacktrace
           fi
 
       - name: Upload Debug APK
