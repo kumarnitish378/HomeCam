@@ -126,6 +126,8 @@ class MjpegServer(
                         append("\"remoteHost\":\"${escapeJson(FrameBus.remoteHost.value.orEmpty())}\",")
                         append("\"remotePort\":${FrameBus.remotePort.value},")
                         append("\"certFp\":\"${FrameBus.certFingerprint.value.orEmpty()}\",")
+                        append("\"lanIp\":\"${NetUtils.findLanIp().orEmpty()}\",")
+                        append("\"tailscaleIp\":\"${NetUtils.findTailscaleIp().orEmpty()}\",")
                         append("\"lensFacing\":\"${FrameBus.lensFacing.value}\"")
                         append("}")
                     }

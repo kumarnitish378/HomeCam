@@ -187,7 +187,7 @@ fun CameraScreen(
         remoteHostForQr = ""
     }
 
-    val pairingInfo = remember(config.cameraName, selectedHostForQr, config.port, token, remoteHostForQr, certFp, config.remotePort) {
+    val pairingInfo = remember(config.cameraName, selectedHostForQr, config.port, token, remoteHostForQr, certFp, config.remotePort, tailscaleIp, lanIp) {
         PairingInfo(
             name = config.cameraName,
             host = selectedHostForQr,
@@ -195,7 +195,9 @@ fun CameraScreen(
             token = token,
             remoteHost = remoteHostForQr,
             remotePort = config.remotePort,
-            certFp = certFp
+            certFp = certFp,
+            // Viewer tries every address, so pairing works whichever one is reachable
+            altHosts = listOfNotNull(tailscaleIp, lanIp).filter { it != selectedHostForQr }
         )
     }
 
@@ -415,11 +417,13 @@ fun CameraScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text("Motion Detection", style = MaterialTheme.typography.labelMedium)
-                        val lastMotionText = if (lastMotion > 0L) {
-                            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastMotion))
-                            "Last event at $timeStr"
-                        } else {
-                            "Monitoring active (cooldown 30s)"
+                        val lastMotionText = when {
+                            !config.motionEnabled -> "Off (turn on in Settings)"
+                            lastMotion > 0L -> {
+                                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastMotion))
+                                "Last event at $timeStr"
+                            }
+                            else -> "Monitoring active (cooldown ${config.motionCooldownSec}s)"
                         }
                         Text(
                             text = lastMotionText,
@@ -762,6 +766,7 @@ fun CameraScreen(
                         quality = updatedConfig.jpegQuality,
                         lensFacing = updatedConfig.lensFacing,
                         motionSensitivity = updatedConfig.motionSensitivity,
+                        motionEnabled = updatedConfig.motionEnabled,
                         tailscaleOnly = updatedConfig.tailscaleOnly,
                         remoteEnabled = updatedConfig.remoteEnabled,
                         duckDomain = updatedConfig.duckDomain,
@@ -876,6 +881,7 @@ fun CameraSettingsDialog(
     var fps by remember { mutableIntStateOf(config.maxFps) }
     var quality by remember { mutableIntStateOf(config.jpegQuality) }
     var sensitivity by remember { mutableStateOf(config.motionSensitivity) }
+    var motionEnabled by remember { mutableStateOf(config.motionEnabled) }
     var tailscaleOnly by remember { mutableStateOf(config.tailscaleOnly) }
     var remoteEnabled by remember { mutableStateOf(config.remoteEnabled) }
     var duckDomain by remember { mutableStateOf(config.duckDomain) }
@@ -927,6 +933,15 @@ fun CameraSettingsDialog(
                     valueRange = 30f..95f,
                     steps = 12
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Motion detection", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Switch(checked = motionEnabled, onCheckedChange = { motionEnabled = it })
+                }
 
                 Text(
                     "Motion Sensitivity: ${String.format(Locale.US, "%.1f", sensitivity * 100)}%",
@@ -1057,6 +1072,7 @@ fun CameraSettingsDialog(
                         maxFps = fps,
                         jpegQuality = quality,
                         motionSensitivity = sensitivity,
+                        motionEnabled = motionEnabled,
                         tailscaleOnly = tailscaleOnly,
                         remoteEnabled = remoteEnabled,
                         duckDomain = duckDomain.removeSuffix(".duckdns.org"),

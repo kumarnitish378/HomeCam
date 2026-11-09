@@ -18,11 +18,15 @@ data class PairingInfo(
     val remoteHost: String = "",
     val remotePort: Int = 8443,
     /** SHA-256 of the camera's HTTPS certificate, pinned by the viewer */
-    val certFp: String = ""
+    val certFp: String = "",
+    /** Other local addresses of the camera (e.g. LAN when [host] is Tailscale) */
+    val altHosts: List<String> = emptyList()
 ) {
     fun toUriString(): String {
         val encodedName = URLEncoder.encode(name, "UTF-8")
-        val base = "homecam://pair?name=$encodedName&host=$host&port=$port&t=$token"
+        val alt = altHosts.filter { it.isNotBlank() && it != host }
+        val base = "homecam://pair?name=$encodedName&host=$host&port=$port&t=$token" +
+            (if (alt.isNotEmpty()) "&h2=" + URLEncoder.encode(alt.joinToString(","), "UTF-8") else "")
         return if (remoteHost.isNotBlank() && certFp.isNotBlank()) {
             base + "&rh=" + URLEncoder.encode(remoteHost, "UTF-8") + "&rp=$remotePort&fp=$certFp"
         } else base
@@ -46,7 +50,8 @@ data class PairingInfo(
                         token = token,
                         remoteHost = params["rh"].orEmpty(),
                         remotePort = params["rp"]?.toIntOrNull() ?: 8443,
-                        certFp = params["fp"].orEmpty().lowercase()
+                        certFp = params["fp"].orEmpty().lowercase(),
+                        altHosts = params["h2"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
                     )
                 }
 

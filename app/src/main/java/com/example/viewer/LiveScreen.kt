@@ -129,6 +129,7 @@ fun LiveScreen(
     // How we currently reach the camera (Home Wi-Fi, Tailscale or Internet IPv6)
     var activeRoute by remember { mutableStateOf<Route?>(null) }
     var activeBaseUrl by remember { mutableStateOf(camera.baseUrl) }
+    var connectError by remember { mutableStateOf<String?>(null) }
 
     // Stream frames using MjpegClient. Runs only while screen is active!
     // Each attempt picks the first route that answers (LAN/Tailscale first, then internet),
@@ -138,6 +139,7 @@ fun LiveScreen(
         isDisconnected = false
         while (true) {
             val endpoint = repository.resolveEndpoint(camera)
+            connectError = if (endpoint == null) repository.lastError(camera) else null
             if (endpoint != null) {
                 activeRoute = endpoint.route
                 activeBaseUrl = endpoint.baseUrl
@@ -301,12 +303,22 @@ fun LiveScreen(
                                 color = Color.White
                             )
                             Spacer(modifier = Modifier.width(14.dp))
-                            Text(
-                                "Reconnecting...",
-                                color = Color.White,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Column {
+                                Text(
+                                    "Reconnecting...",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                connectError?.let { reason ->
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        reason,
+                                        color = Color.White.copy(alpha = 0.8f),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
                         }
                     }
                 }

@@ -5,7 +5,12 @@ import com.example.core.SettingsRepository
 import com.example.core.TlsIdentity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
@@ -36,7 +41,9 @@ data class CameraItem(
     val remoteHost: String = "",
     val remotePort: Int = 8443,
     /** Pinned SHA-256 of the camera's HTTPS certificate */
-    val certFp: String = ""
+    val certFp: String = "",
+    /** Other local addresses (LAN / Tailscale) the camera can be reached at */
+    val altHosts: List<String> = emptyList()
 ) {
     val baseUrl: String
         get() = "http://${NetUtils.hostForUrl(host)}:$port"
@@ -185,6 +192,7 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
                 put("remoteHost", item.remoteHost)
                 put("remotePort", item.remotePort)
                 put("certFp", item.certFp)
+                put("altHosts", item.altHosts.joinToString(","))
             }
             array.put(obj)
         }
@@ -207,7 +215,8 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
                         addedAt = obj.optLong("addedAt", System.currentTimeMillis()),
                         remoteHost = obj.optString("remoteHost", ""),
                         remotePort = obj.optInt("remotePort", 8443),
-                        certFp = obj.optString("certFp", "")
+                        certFp = obj.optString("certFp", ""),
+                        altHosts = obj.optString("altHosts", "").split(',').map { it.trim() }.filter { it.isNotEmpty() }
                     )
                 )
             }
@@ -223,9 +232,13 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
 
     /** All ways to reach [camera]: the last one that worked first, then LAN/Tailscale, then internet. */
     private fun endpointsFor(camera: CameraItem): List<Endpoint> {
-        val list = mutableListOf(
-            Endpoint(camera.baseUrl, if (camera.isTailscale) Route.TAILSCALE else Route.LAN, httpClient)
-        )
+        val list = (listOf(camera.host) + camera.altHosts).distinct().map { h ->
+            Endpoint(
+                "http://${NetUtils.hostForUrl(h)}:${camera.port}",
+                if (NetUtils.isTailscaleIp(h)) Route.TAILSCALE else Route.LAN,
+                httpClient
+            )
+        }.toMutableList()
         if (camera.hasRemote) {
             list.add(Endpoint(camera.remoteBaseUrl, Route.INTERNET, pinnedClient(camera.certFp)))
         }
@@ -248,63 +261,137 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
         return if (status.isOnline) activeEndpoint[camera.id] else null
     }
 
+    /** Why the last connection attempt to each camera failed, per route (for the UI). */
+    private val lastErrors = ConcurrentHashMap<String, String>()
+
+    /** Human-readable reasons the camera couldn't be reached, or null. */
+    fun lastError(camera: CameraItem): String? = lastErrors[camera.id]
+
+    private sealed class Probe {
+        class Ok(val ep: Endpoint, val json: JSONObject) : Probe()
+        class Failed(val ep: Endpoint, val reason: String) : Probe()
+    }
+
+    /** One /status request; cancelling the coroutine cancels the HTTP call immediately. */
+    private suspend fun probe(ep: Endpoint, token: String): Probe =
+        suspendCancellableCoroutine { cont ->
+            val request = Request.Builder()
+                .url("${ep.baseUrl}/status")
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+            val call = ep.client.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                    if (cont.isActive) cont.resume(Probe.Failed(ep, describe(e)))
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    val result = try {
+                        response.use {
+                            when {
+                                it.isSuccessful -> Probe.Ok(ep, JSONObject(it.body?.string().orEmpty()))
+                                it.code == 401 -> Probe.Failed(ep, "wrong token or blocked (scan the QR again)")
+                                else -> Probe.Failed(ep, "HTTP ${it.code}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Probe.Failed(ep, describe(e))
+                    }
+                    if (cont.isActive) cont.resume(result)
+                }
+            })
+        }
+
+    private fun describe(e: Exception): String = when (e) {
+        is java.net.SocketTimeoutException -> "no answer (timeout)"
+        is java.net.ConnectException -> "connection refused or no route"
+        is java.net.UnknownHostException -> "name not found"
+        is java.net.NoRouteToHostException -> "no route (is this network on IPv6?)"
+        is javax.net.ssl.SSLPeerUnverifiedException,
+        is java.security.cert.CertificateException -> "certificate does not match (scan the QR again)"
+        is javax.net.ssl.SSLException -> if (e.cause is java.security.cert.CertificateException)
+            "certificate does not match (scan the QR again)" else "secure connection failed: ${e.message}"
+        is org.json.JSONException -> "unexpected reply (update the camera app)"
+        else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /**
+     * Asks every route (LAN, Tailscale, internet) at once and uses the first that answers,
+     * so a dead route never makes the user wait for its timeout.
+     */
     suspend fun fetchStatus(camera: CameraItem): CameraStatus = withContext(Dispatchers.IO) {
         val cam = latest(camera)
-        var lastError = "Unreachable"
-        for (ep in endpointsFor(cam)) {
-            try {
-                val request = Request.Builder()
-                    .url("${ep.baseUrl}/status")
-                    .header("Authorization", "Bearer ${cam.token}")
-                    .get()
-                    .build()
-                val result = ep.client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        response.body?.string().orEmpty()
-                    } else {
-                        lastError = "HTTP ${response.code}"
-                        null
+        val endpoints = endpointsFor(cam)
+        val failures = java.util.Collections.synchronizedList(mutableListOf<Probe.Failed>())
+        val winner = channelFlow {
+            for (ep in endpoints) {
+                launch {
+                    when (val r = probe(ep, cam.token)) {
+                        is Probe.Ok -> send(r)
+                        is Probe.Failed -> failures.add(r)
                     }
-                } ?: continue
-
-                val json = JSONObject(result)
-                activeEndpoint[cam.id] = ep
-                learnRemoteAddress(cam, json)
-                return@withContext CameraStatus(
-                    isOnline = true,
-                    fps = json.optInt("fps", 0),
-                    viewers = json.optInt("viewers", 0),
-                    lastMotion = json.optLong("lastMotion", 0L),
-                    battery = json.optInt("battery", 0),
-                    temperature = json.optDouble("temperature", 0.0).toFloat(),
-                    isCharging = json.optBoolean("isCharging", false),
-                    isHeatThrottled = json.optBoolean("isHeatThrottled", false),
-                    torchOn = json.optBoolean("torchOn", false),
-                    lensFacing = json.optString("lensFacing", "BACK"),
-                    motionEnabled = json.optBoolean("motionEnabled", true),
-                    route = ep.route
-                )
-            } catch (e: Exception) {
-                lastError = e.message ?: "Unreachable"
+                }
             }
+        }.firstOrNull()
+
+        if (winner == null) {
+            activeEndpoint.remove(cam.id)
+            val reason = failures
+                .sortedBy { f -> endpoints.indexOfFirst { it.baseUrl == f.ep.baseUrl } }
+                .joinToString("\n") { "${it.ep.route.label} (${it.ep.baseUrl.substringAfter("://")}): ${it.reason}" }
+                .ifBlank { "Unreachable" }
+            lastErrors[cam.id] = reason
+            return@withContext CameraStatus(isOnline = false, errorMessage = reason)
         }
-        activeEndpoint.remove(cam.id)
-        CameraStatus(isOnline = false, errorMessage = lastError)
+
+        val ep = winner.ep
+        val json = winner.json
+        activeEndpoint[cam.id] = ep
+        lastErrors.remove(cam.id)
+        learnAddresses(cam, json)
+        CameraStatus(
+            isOnline = true,
+            fps = json.optInt("fps", 0),
+            viewers = json.optInt("viewers", 0),
+            lastMotion = json.optLong("lastMotion", 0L),
+            battery = json.optInt("battery", 0),
+            temperature = json.optDouble("temperature", 0.0).toFloat(),
+            isCharging = json.optBoolean("isCharging", false),
+            isHeatThrottled = json.optBoolean("isHeatThrottled", false),
+            torchOn = json.optBoolean("torchOn", false),
+            lensFacing = json.optString("lensFacing", "BACK"),
+            motionEnabled = json.optBoolean("motionEnabled", true),
+            route = ep.route
+        )
     }
 
     /**
      * Keeps the saved internet address current: whenever the camera reports a new IPv6
      * (e.g. the router got a new prefix) or turns internet access on, store it.
      */
-    private suspend fun learnRemoteAddress(cam: CameraItem, json: JSONObject) {
-        if (!json.optBoolean("remoteEnabled", false)) return
-        val host = json.optString("remoteHost", "")
-        val fp = json.optString("certFp", "").lowercase()
-        val port = json.optInt("remotePort", 8443)
-        if (host.isBlank() || fp.isBlank()) return
-        if (host != cam.remoteHost || fp != cam.certFp || port != cam.remotePort) {
-            addCamera(cam.copy(remoteHost = host, remotePort = port, certFp = fp))
+    private suspend fun learnAddresses(cam: CameraItem, json: JSONObject) {
+        var updated = cam
+
+        // Local addresses: keep LAN + Tailscale both known, whichever one we paired with
+        val locals = listOf(json.optString("lanIp", ""), json.optString("tailscaleIp", ""))
+            .filter { it.isNotBlank() && it != cam.host }
+        val alt = (locals + cam.altHosts.filter { it in locals }).distinct()
+        if (alt.toSet() != cam.altHosts.toSet()) updated = updated.copy(altHosts = alt)
+
+        // Internet (IPv6) address, port and certificate
+        if (json.optBoolean("remoteEnabled", false)) {
+            val host = json.optString("remoteHost", "")
+            val fp = json.optString("certFp", "").lowercase()
+            val port = json.optInt("remotePort", 8443)
+            if (host.isNotBlank() && fp.isNotBlank() &&
+                (host != cam.remoteHost || fp != cam.certFp || port != cam.remotePort)
+            ) {
+                updated = updated.copy(remoteHost = host, remotePort = port, certFp = fp)
+            }
         }
+        if (updated != cam) addCamera(updated)
     }
 
     suspend fun sendTorchControl(camera: CameraItem, turnOn: Boolean): Boolean =
