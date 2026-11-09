@@ -1,0 +1,6 @@
+{
+  "name": "HomeCam",
+  "description": "Android camera and viewer app for CCTV streaming over LAN and Tailscale with motion detection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

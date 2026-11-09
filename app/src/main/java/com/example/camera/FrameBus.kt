@@ -1,0 +1,59 @@
+package com.example.camera
+
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+
+data class MotionRecord(
+    val id: String,
+    val timestamp: Long,
+    val filePath: String,
+    val fileSize: Long
+)
+
+/**
+ * Global bus holding the latest encoded JPEG frame and streaming telemetry.
+ * Each connected client consumes frames with conflate() on its own coroutine.
+ */
+object FrameBus {
+    /** Latest encoded JPEG frame */
+    val latest = MutableStateFlow<ByteArray?>(null)
+
+    /** Number of active streaming connections */
+    val activeViewers = MutableStateFlow(0)
+
+    /** Current frames per second measured at encoder */
+    val currentFps = MutableStateFlow(0)
+
+    /** Service streaming active state */
+    val isStreaming = MutableStateFlow(false)
+
+    /** Timestamp of last detected motion event */
+    val lastMotionTimestamp = MutableStateFlow(0L)
+
+    /** Battery level in percentage */
+    val batteryPercent = MutableStateFlow(100)
+
+    /** Battery temperature in degrees Celsius */
+    val batteryTemp = MutableStateFlow(25.0f)
+
+    /** Whether phone is on charger */
+    val isCharging = MutableStateFlow(false)
+
+    /** True if camera dropped resolution & fps due to temperature > 42°C */
+    val isHeatThrottled = MutableStateFlow(false)
+
+    /** Current torch state requested */
+    val torchEnabled = MutableStateFlow(false)
+
+    /** Current camera facing: "BACK" or "FRONT" */
+    val lensFacing = MutableStateFlow("BACK")
+
+    /** Control command channel: "TOGGLE_TORCH", "SWITCH_LENS", etc. */
+    val controlCommands = MutableSharedFlow<String>(extraBufferCapacity = 10)
+
+    /** Recent motion snapshots */
+    val recentMotionSnapshots = MutableStateFlow<List<MotionRecord>>(emptyList())
+
+    /** Last camera error message if any */
+    val cameraError = MutableStateFlow<String?>(null)
+}
