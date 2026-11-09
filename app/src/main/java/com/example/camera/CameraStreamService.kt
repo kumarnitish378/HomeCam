@@ -1,5 +1,6 @@
 package com.example.camera
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -109,6 +110,7 @@ class CameraStreamService : LifecycleService() {
         return START_NOT_STICKY // Camera cannot restart from background without activity
     }
 
+    @SuppressLint("WakelockTimeout") // Held for the whole stream; released in onDestroy()
     private fun initService() {
         // 1. Start foreground immediately
         val notification = buildStreamNotification()
@@ -121,7 +123,9 @@ class CameraStreamService : LifecycleService() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HomeCam:StreamWakeLock").apply {
             setReferenceCounted(false)
-            acquire(24 * 60 * 60 * 1000L) // 24 hours
+            // No timeout: the camera runs 24x7, so a timed lock would let the CPU
+            // sleep after it expires and silently stop the stream.
+            acquire()
         }
 
         // 3. Acquire Wi-Fi lock
