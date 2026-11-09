@@ -15,7 +15,7 @@ android {
   defaultConfig {
     applicationId = "com.aistudio.homecam.vxztqr"
     minSdk = 26
-    targetSdk = 36
+    targetSdk = 35
     // CI passes these from the release tag (v1.2.3 -> 1.2.3) and the run number,
     // so every release has a higher versionCode and the in-app updater can compare names.
     versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
