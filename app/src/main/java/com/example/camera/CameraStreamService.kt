@@ -66,6 +66,8 @@ class CameraStreamService : LifecycleService() {
     private var motionDetector: MotionDetector? = null
     private var server: MjpegServer? = null
     private var remoteProxy: RemoteTlsProxy? = null
+    private val recorder by lazy { RollingRecorder(applicationContext) }
+    private var recordingEnabled = true
     private var remoteJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -182,6 +184,15 @@ class CameraStreamService : LifecycleService() {
                     CameraSelector.LENS_FACING_BACK
                 }
                 FrameBus.lensFacing.value = if (currentLensFacing == CameraSelector.LENS_FACING_FRONT) "FRONT" else "BACK"
+
+                // Loop recording: size limit applies to the next prune; on/off or quality
+                // changes need the camera re-bound with a new VideoCapture.
+                recorder.limitBytes = config.recordingLimitMb.toLong() * 1024 * 1024
+                val newLevel = RollingRecorder.Level.from(config.recordingQuality)
+                val needsRebind = config.recordingEnabled != recordingEnabled || newLevel != recorder.level
+                recordingEnabled = config.recordingEnabled
+                recorder.level = newLevel
+                if (needsRebind) bindCameraUseCases()
             }
         }
 
@@ -279,6 +290,7 @@ class CameraStreamService : LifecycleService() {
 
     private fun bindCameraUseCases() {
         val provider = cameraProvider ?: return
+        recorder.detach()
         provider.unbindAll()
 
         val selector = CameraSelector.Builder()
@@ -310,14 +322,43 @@ class CameraStreamService : LifecycleService() {
 
         analysis.setAnalyzer(executor) { imageProxy ->
             imageProxy.use { image ->
-                val frame = encoder.encode(image) ?: return@use
-                FrameBus.latest.value = frame.jpeg
+                // Stream only on demand: encode JPEGs while a viewer is connected or a
+                // snapshot was asked for. Otherwise just watch for motion at a low rate.
+                val now = android.os.SystemClock.elapsedRealtime()
+                val wanted = FrameBus.activeViewers.value > 0 || now < FrameBus.encodeUntil.value
+                val frame = encoder.encode(image, idle = !wanted) ?: return@use
+                if (wanted) {
+                    FrameBus.latest.value = frame.jpeg
+                    FrameBus.latestAt.value = now
+                } else if (FrameBus.latest.value != null) {
+                    FrameBus.latest.value = null // never serve a stale frame to the next viewer
+                }
                 motionDetector?.process(frame, applicationContext)
             }
         }
 
+        // Loop recording runs alongside, using the phone's hardware video encoder.
+        val videoCapture = if (recordingEnabled) recorder.createUseCase() else null
+
         try {
-            activeCamera = provider.bindToLifecycle(this, selector, analysis)
+            FrameBus.recordingError.value = null
+            var videoBound = false
+            activeCamera = if (videoCapture != null) {
+                try {
+                    provider.bindToLifecycle(this, selector, analysis, videoCapture).also { videoBound = true }
+                } catch (e: Exception) {
+                    // Some phones can't run analysis + video together; keep live view working.
+                    provider.unbindAll()
+                    FrameBus.recordingError.value =
+                        "This phone can't record and stream at the same time: ${e.message}"
+                    provider.bindToLifecycle(this, selector, analysis)
+                }
+            } else {
+                provider.bindToLifecycle(this, selector, analysis)
+            }
+            if (videoCapture != null && videoBound) {
+                recorder.attach(videoCapture)
+            }
             cameraControl = activeCamera?.cameraControl
             activeCamera?.cameraControl?.enableTorch(FrameBus.torchEnabled.value)
             FrameBus.cameraError.value = null
@@ -500,6 +541,7 @@ class CameraStreamService : LifecycleService() {
         }
 
         try {
+            recorder.detach()
             activeCamera?.cameraControl?.enableTorch(false)
             cameraProvider?.unbindAll()
         } catch (_: Exception) {

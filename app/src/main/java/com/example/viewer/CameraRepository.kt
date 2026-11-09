@@ -107,6 +107,31 @@ data class MotionConfig(
     val cooldownSec: Int = 30
 )
 
+/** Loop recording settings of a camera, as served by /config/recording. */
+data class RecordingConfig(
+    val enabled: Boolean = true,
+    val limitMb: Int = 2048,
+    val quality: String = "MEDIUM",
+    val usedBytes: Long = 0L,
+    val recording: Boolean = false
+)
+
+/** One recorded MP4 segment on the camera. */
+data class RecordingItem(
+    val name: String,
+    val size: Long,
+    val inProgress: Boolean
+) {
+    /** Start time parsed from rec_yyyyMMdd_HHmmss.mp4, or null. */
+    val startMillis: Long?
+        get() = try {
+            java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                .parse(name.removePrefix("rec_").removeSuffix(".mp4"))?.time
+        } catch (_: Exception) {
+            null
+        }
+}
+
 class CameraRepository(private val settingsRepo: SettingsRepository) {
 
     private val httpClient = OkHttpClient.Builder()
@@ -343,6 +368,125 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
                 null
             }
         }
+
+    suspend fun fetchRecordingConfig(camera: CameraItem): RecordingConfig? = withContext(Dispatchers.IO) {
+        try {
+            val cam = latest(camera)
+            val ep = currentEndpoint(cam)
+            val request = Request.Builder()
+                .url("${ep.baseUrl}/config/recording")
+                .header("Authorization", "Bearer ${cam.token}")
+                .get()
+                .build()
+            ep.client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) parseRecordingConfig(response.body?.string().orEmpty()) else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun updateRecordingConfig(camera: CameraItem, config: RecordingConfig): RecordingConfig? =
+        withContext(Dispatchers.IO) {
+            try {
+                val cam = latest(camera)
+                val ep = currentEndpoint(cam)
+                val url = "${ep.baseUrl}/config/recording" +
+                    "?enabled=${if (config.enabled) 1 else 0}" +
+                    "&limitMb=${config.limitMb}" +
+                    "&quality=${config.quality}"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("Authorization", "Bearer ${cam.token}")
+                    .post(ByteArray(0).toRequestBody())
+                    .build()
+                ep.client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) parseRecordingConfig(response.body?.string().orEmpty()) else null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+    private fun parseRecordingConfig(body: String): RecordingConfig? = try {
+        val json = JSONObject(body)
+        RecordingConfig(
+            enabled = json.optBoolean("enabled", true),
+            limitMb = json.optInt("limitMb", 2048),
+            quality = json.optString("quality", "MEDIUM"),
+            usedBytes = json.optLong("usedBytes", 0L),
+            recording = json.optBoolean("recording", false)
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    suspend fun listRecordings(camera: CameraItem): List<RecordingItem>? = withContext(Dispatchers.IO) {
+        try {
+            val cam = latest(camera)
+            val ep = currentEndpoint(cam)
+            val request = Request.Builder()
+                .url("${ep.baseUrl}/recordings")
+                .header("Authorization", "Bearer ${cam.token}")
+                .get()
+                .build()
+            ep.client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val array = JSONArray(response.body?.string().orEmpty())
+                (0 until array.length()).map { i ->
+                    val o = array.getJSONObject(i)
+                    RecordingItem(
+                        name = o.optString("name"),
+                        size = o.optLong("size"),
+                        inProgress = o.optBoolean("inProgress")
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Downloads one segment into [target], reporting progress 0..1. Returns true on success. */
+    suspend fun downloadRecording(
+        camera: CameraItem,
+        item: RecordingItem,
+        target: java.io.File,
+        onProgress: (Float) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val cam = latest(camera)
+            val ep = currentEndpoint(cam)
+            val client = ep.client.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
+            val request = Request.Builder()
+                .url("${ep.baseUrl}/recordings/${item.name}")
+                .header("Authorization", "Bearer ${cam.token}")
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use false
+                val body = response.body ?: return@use false
+                val total = body.contentLength().takeIf { it > 0 } ?: item.size
+                val partial = java.io.File(target.path + ".part")
+                body.byteStream().use { input ->
+                    partial.outputStream().use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            output.write(buf, 0, n)
+                            done += n
+                            if (total > 0) onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+                        }
+                    }
+                }
+                partial.renameTo(target)
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun parseMotionConfig(body: String): MotionConfig? = try {
         val json = JSONObject(body)

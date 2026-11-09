@@ -16,19 +16,29 @@ import java.io.ByteArrayOutputStream
  * YuvImage.compressToJpeg, which is native. Rotation is done by CameraX itself
  * (ImageAnalysis.setOutputImageRotationEnabled), so frames arrive upright.
  *
- * Caps the frame rate at maxFps to limit CPU use and heat.
+ * Caps the frame rate at maxFps to limit CPU use and heat. When nobody is watching ("idle"),
+ * frames are only taken at [IDLE_FPS] for motion detection, and JPEG encoding is skipped
+ * entirely unless a motion snapshot needs it.
  */
 class FrameEncoder(
     var quality: Int = 70,
     var maxFps: Int = 12
 ) {
-    /** One encoded frame plus the data motion detection needs from it. */
-    class EncodedFrame(
-        val jpeg: ByteArray,
+    companion object {
+        const val IDLE_FPS = 5
+    }
+
+    /**
+     * One camera frame as NV21. [jpeg] is encoded on first access only, so frames nobody
+     * watches never pay for JPEG compression. Both are valid only until the next [encode] call.
+     */
+    inner class EncodedFrame(
         val nv21: ByteArray,
         val width: Int,
         val height: Int
-    )
+    ) {
+        val jpeg: ByteArray by lazy { compress(nv21, width, height) }
+    }
 
     private var lastMs = 0L
     private var frameCountInWindow = 0
@@ -38,11 +48,12 @@ class FrameEncoder(
     private val jpegOut = ByteArrayOutputStream(256 * 1024)
 
     /**
-     * Returns the encoded frame, or null when this frame is skipped by the fps cap.
+     * Returns the frame, or null when it is skipped by the fps cap ([idle] = nobody watching).
      * The returned [EncodedFrame.nv21] buffer is reused on the next call; read it before then.
      */
-    fun encode(image: ImageProxy): EncodedFrame? {
-        val minGapMs = if (maxFps > 0) 1000L / maxFps else 50L
+    fun encode(image: ImageProxy, idle: Boolean = false): EncodedFrame? {
+        val fps = if (idle) minOf(IDLE_FPS, maxFps) else maxFps
+        val minGapMs = if (fps > 0) 1000L / fps else 50L
         val now = SystemClock.elapsedRealtime()
         if (now - lastMs < minGapMs) return null
         lastMs = now
@@ -53,12 +64,15 @@ class FrameEncoder(
         if (nv21.size != size) nv21 = ByteArray(size)
         yuv420ToNv21(image, nv21)
 
-        jpegOut.reset()
-        YuvImage(nv21, ImageFormat.NV21, width, height, null)
-            .compressToJpeg(Rect(0, 0, width, height), quality.coerceIn(10, 100), jpegOut)
-
         trackFps(now)
-        return EncodedFrame(jpegOut.toByteArray(), nv21, width, height)
+        return EncodedFrame(nv21, width, height)
+    }
+
+    private fun compress(data: ByteArray, width: Int, height: Int): ByteArray {
+        jpegOut.reset()
+        YuvImage(data, ImageFormat.NV21, width, height, null)
+            .compressToJpeg(Rect(0, 0, width, height), quality.coerceIn(10, 100), jpegOut)
+        return jpegOut.toByteArray()
     }
 
     private fun trackFps(now: Long) {

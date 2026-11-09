@@ -15,6 +15,7 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -23,6 +24,7 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import java.io.File
 
@@ -82,8 +84,16 @@ class MjpegServer(
                         return@get
                     }
 
+                    // Frames are only encoded on demand: ask for a fresh one and wait up to 3 s.
+                    val asked = android.os.SystemClock.elapsedRealtime()
+                    FrameBus.encodeUntil.value = asked + 3000
+                    var waited = 0
+                    while (FrameBus.latestAt.value < asked && waited < 3000) {
+                        delay(50)
+                        waited += 50
+                    }
                     val jpeg = FrameBus.latest.value
-                    if (jpeg == null) {
+                    if (jpeg == null || FrameBus.latestAt.value < asked) {
                         call.respond(HttpStatusCode.ServiceUnavailable, "No frame available")
                     } else {
                         call.respondBytes(jpeg, ContentType.Image.JPEG)
@@ -109,6 +119,9 @@ class MjpegServer(
                         append("\"isHeatThrottled\":${FrameBus.isHeatThrottled.value},")
                         append("\"torchOn\":${FrameBus.torchEnabled.value},")
                         append("\"motionEnabled\":${FrameBus.motionEnabled.value},")
+                        append("\"recording\":${FrameBus.recordingActive.value},")
+                        append("\"recordingUsedBytes\":${FrameBus.recordingUsedBytes.value},")
+                        append("\"recordingError\":\"${escapeJson(FrameBus.recordingError.value.orEmpty())}\",")
                         append("\"remoteEnabled\":${FrameBus.remoteEnabled.value},")
                         append("\"remoteHost\":\"${escapeJson(FrameBus.remoteHost.value.orEmpty())}\",")
                         append("\"remotePort\":${FrameBus.remotePort.value},")
@@ -190,6 +203,91 @@ class MjpegServer(
                         motionCooldownSec = cooldown
                     )
                     call.respondText(motionConfigJson(repo), ContentType.Application.Json)
+                }
+
+                // Loop recording settings: read
+                get("/config/recording") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@get
+                    }
+                    val repo = settingsRepo
+                    if (repo == null) {
+                        call.respond(HttpStatusCode.ServiceUnavailable, "Settings unavailable")
+                        return@get
+                    }
+                    call.respondText(recordingConfigJson(repo), ContentType.Application.Json)
+                }
+
+                // Loop recording settings: change any of enabled / limitMb / quality.
+                // Example: POST /config/recording?enabled=1&limitMb=2048&quality=MEDIUM
+                post("/config/recording") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@post
+                    }
+                    val repo = settingsRepo
+                    if (repo == null) {
+                        call.respond(HttpStatusCode.ServiceUnavailable, "Settings unavailable")
+                        return@post
+                    }
+                    val q = call.request.queryParameters
+                    val enabled = q["enabled"]?.let { it == "1" || it.equals("true", ignoreCase = true) }
+                    val limitMb = q["limitMb"]?.toIntOrNull()
+                    val quality = q["quality"]?.uppercase()
+                    if ((q["limitMb"] != null && (limitMb == null || limitMb !in 256..65536)) ||
+                        (quality != null && quality !in setOf("LOW", "MEDIUM", "HIGH"))
+                    ) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            "limitMb must be 256-65536, quality must be LOW, MEDIUM or HIGH"
+                        )
+                        return@post
+                    }
+                    repo.updateCameraConfig(
+                        recordingEnabled = enabled,
+                        recordingLimitMb = limitMb,
+                        recordingQuality = quality
+                    )
+                    call.respondText(recordingConfigJson(repo), ContentType.Application.Json)
+                }
+
+                // Recorded segments, newest first. The one still being written is marked.
+                get("/recordings") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@get
+                    }
+                    val current = FrameBus.currentRecordingFile.value
+                    val json = buildString {
+                        append("[")
+                        RollingRecorder.listSegments(context).asReversed().forEachIndexed { i, f ->
+                            if (i > 0) append(",")
+                            append("{\"name\":\"${f.name}\",\"size\":${f.length()},")
+                            append("\"inProgress\":${f.name == current}}")
+                        }
+                        append("]")
+                    }
+                    call.respondText(json, ContentType.Application.Json)
+                }
+
+                // Download one recorded segment (MP4)
+                get("/recordings/{name}") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@get
+                    }
+                    val name = call.parameters["name"].orEmpty()
+                    if (!RollingRecorder.isRecordingName(name)) {
+                        call.respond(HttpStatusCode.BadRequest, "Invalid name")
+                        return@get
+                    }
+                    val file = java.io.File(RollingRecorder.directory(context), name)
+                    if (!file.isFile) {
+                        call.respond(HttpStatusCode.NotFound, "Not found")
+                        return@get
+                    }
+                    call.respondFile(file)
                 }
 
                 // Motion snapshots listing
@@ -286,6 +384,13 @@ class MjpegServer(
         val c = repo.cameraConfig.first()
         return "{\"enabled\":${c.motionEnabled},\"sensitivity\":${c.motionSensitivity}," +
             "\"cooldownSec\":${c.motionCooldownSec}}"
+    }
+
+    private suspend fun recordingConfigJson(repo: SettingsRepository): String {
+        val c = repo.cameraConfig.first()
+        return "{\"enabled\":${c.recordingEnabled},\"limitMb\":${c.recordingLimitMb}," +
+            "\"quality\":\"${c.recordingQuality}\",\"usedBytes\":${FrameBus.recordingUsedBytes.value}," +
+            "\"recording\":${FrameBus.recordingActive.value}}"
     }
 
     private fun escapeJson(str: String): String {

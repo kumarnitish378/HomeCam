@@ -64,6 +64,20 @@ object FrameBus {
     val certFingerprint = MutableStateFlow<String?>(null)
     val remoteError = MutableStateFlow<String?>(null)
 
+    /** Loop recording state */
+    val recordingActive = MutableStateFlow(false)
+    val recordingUsedBytes = MutableStateFlow(0L)
+    val currentRecordingFile = MutableStateFlow<String?>(null)
+    val recordingError = MutableStateFlow<String?>(null)
+
+    /**
+     * On-demand streaming: JPEG frames are only produced while a viewer is connected, or until
+     * this time (SystemClock.elapsedRealtime) when someone asked for a single snapshot.
+     */
+    val encodeUntil = MutableStateFlow(0L)
+    /** elapsedRealtime of the frame in [latest] */
+    val latestAt = MutableStateFlow(0L)
+
     /** Last camera error message if any */
     val cameraError = MutableStateFlow<String?>(null)
 }

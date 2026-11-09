@@ -36,6 +36,9 @@ class SettingsRepository(private val context: Context) {
         val KEY_REMOTE_PORT = intPreferencesKey("remote_ipv6_port")
         val KEY_DUCK_DOMAIN = stringPreferencesKey("duckdns_domain")
         val KEY_DUCK_TOKEN = stringPreferencesKey("duckdns_token")
+        val KEY_RECORDING_ENABLED = booleanPreferencesKey("recording_enabled")
+        val KEY_RECORDING_LIMIT_MB = intPreferencesKey("recording_limit_mb")
+        val KEY_RECORDING_QUALITY = stringPreferencesKey("recording_quality")
         val KEY_SAVED_CAMERAS_JSON = stringPreferencesKey("saved_cameras_json")
     }
 
@@ -57,7 +60,11 @@ class SettingsRepository(private val context: Context) {
         val remotePort: Int = 8443,
         /** Optional DuckDNS name (without .duckdns.org) kept pointing at the phone's IPv6 */
         val duckDomain: String = "",
-        val duckToken: String = ""
+        val duckToken: String = "",
+        /** Continuous local loop recording */
+        val recordingEnabled: Boolean = true,
+        val recordingLimitMb: Int = 2048,
+        val recordingQuality: String = "MEDIUM" // LOW, MEDIUM, HIGH
     )
 
     val appMode: Flow<String> = context.dataStore.data.map { prefs ->
@@ -81,7 +88,10 @@ class SettingsRepository(private val context: Context) {
             remoteEnabled = prefs[KEY_REMOTE_ENABLED] ?: false,
             remotePort = prefs[KEY_REMOTE_PORT] ?: 8443,
             duckDomain = prefs[KEY_DUCK_DOMAIN] ?: "",
-            duckToken = prefs[KEY_DUCK_TOKEN] ?: ""
+            duckToken = prefs[KEY_DUCK_TOKEN] ?: "",
+            recordingEnabled = prefs[KEY_RECORDING_ENABLED] ?: true,
+            recordingLimitMb = prefs[KEY_RECORDING_LIMIT_MB] ?: 2048,
+            recordingQuality = prefs[KEY_RECORDING_QUALITY] ?: "MEDIUM"
         )
     }
 
@@ -130,7 +140,10 @@ class SettingsRepository(private val context: Context) {
         remoteEnabled: Boolean? = null,
         remotePort: Int? = null,
         duckDomain: String? = null,
-        duckToken: String? = null
+        duckToken: String? = null,
+        recordingEnabled: Boolean? = null,
+        recordingLimitMb: Int? = null,
+        recordingQuality: String? = null
     ) {
         context.dataStore.edit { prefs ->
             cameraName?.let { prefs[KEY_CAMERA_NAME] = it }
@@ -148,6 +161,9 @@ class SettingsRepository(private val context: Context) {
             remotePort?.let { prefs[KEY_REMOTE_PORT] = it }
             duckDomain?.let { prefs[KEY_DUCK_DOMAIN] = it }
             duckToken?.let { prefs[KEY_DUCK_TOKEN] = it }
+            recordingEnabled?.let { prefs[KEY_RECORDING_ENABLED] = it }
+            recordingLimitMb?.let { prefs[KEY_RECORDING_LIMIT_MB] = it }
+            recordingQuality?.let { prefs[KEY_RECORDING_QUALITY] = it }
         }
     }
 

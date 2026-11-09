@@ -2,4 +2,6 @@
 <paths>
     <!-- Downloaded update APKs (see AppUpdater.download) -->
     <cache-path name="updates" path="updates/" />
+    <!-- Downloaded camera recordings opened in a video player (see RecordingsSheet) -->
+    <cache-path name="recordings" path="recordings/" />
 </paths>

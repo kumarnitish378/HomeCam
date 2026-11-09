@@ -92,6 +92,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.core.NetUtils
 import com.example.core.TlsIdentity
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.horizontalScroll
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.filled.Public
@@ -124,6 +128,9 @@ fun CameraScreen(
     val cameraError by FrameBus.cameraError.collectAsState()
     val currentLensFacing by FrameBus.lensFacing.collectAsState()
     val remoteError by FrameBus.remoteError.collectAsState()
+    val recordingActive by FrameBus.recordingActive.collectAsState()
+    val recordingUsed by FrameBus.recordingUsedBytes.collectAsState()
+    val recordingError by FrameBus.recordingError.collectAsState()
 
     val config by settingsRepo.cameraConfig.collectAsState(initial = SettingsRepository.CameraConfig())
 
@@ -568,6 +575,51 @@ fun CameraScreen(
                 }
             }
 
+            // Loop recording status
+            if (config.recordingEnabled) {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isStreaming && recordingError != null) {
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.FiberManualRecord,
+                                contentDescription = null,
+                                tint = if (recordingActive) Color(0xFFEF4444) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                if (recordingActive) "Recording to this phone" else "Loop recording",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = when {
+                                !isStreaming -> "Starts with the camera service."
+                                recordingError != null -> recordingError!!
+                                else -> "Used ${"%.2f".format(Locale.US, recordingUsed / (1024f * 1024 * 1024))} GB " +
+                                    "of ${"%.1f".format(Locale.US, config.recordingLimitMb / 1024f)} GB. " +
+                                    "Oldest video is deleted automatically. Live video is only sent while a viewer is watching."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isStreaming && recordingError != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // Internet (IPv6) access status
             if (config.remoteEnabled) {
                 Card(
@@ -713,7 +765,10 @@ fun CameraScreen(
                         tailscaleOnly = updatedConfig.tailscaleOnly,
                         remoteEnabled = updatedConfig.remoteEnabled,
                         duckDomain = updatedConfig.duckDomain,
-                        duckToken = updatedConfig.duckToken
+                        duckToken = updatedConfig.duckToken,
+                        recordingEnabled = updatedConfig.recordingEnabled,
+                        recordingLimitMb = updatedConfig.recordingLimitMb,
+                        recordingQuality = updatedConfig.recordingQuality
                     )
                     showSettingsDialog = false
                     Toast.makeText(context, "Settings saved. If streaming, restart to apply network changes.", Toast.LENGTH_SHORT).show()
@@ -825,6 +880,9 @@ fun CameraSettingsDialog(
     var remoteEnabled by remember { mutableStateOf(config.remoteEnabled) }
     var duckDomain by remember { mutableStateOf(config.duckDomain) }
     var duckToken by remember { mutableStateOf(config.duckToken) }
+    var recordingEnabled by remember { mutableStateOf(config.recordingEnabled) }
+    var recordingLimitMb by remember { mutableIntStateOf(config.recordingLimitMb) }
+    var recordingQuality by remember { mutableStateOf(config.recordingQuality) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -905,6 +963,53 @@ fun CameraSettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
+                        Text("Loop recording", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Records continuously on this phone; deletes the oldest video at the limit.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = recordingEnabled, onCheckedChange = { recordingEnabled = it })
+                }
+
+                if (recordingEnabled) {
+                    Text("Storage limit: ${recordingLimitMb / 1024} GB", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = (recordingLimitMb / 1024).toFloat(),
+                        onValueChange = { recordingLimitMb = it.roundToInt().coerceIn(1, 32) * 1024 },
+                        valueRange = 1f..32f,
+                        steps = 30
+                    )
+                    Text("Recording quality", style = MaterialTheme.typography.bodyMedium)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        listOf("LOW" to "Low", "MEDIUM" to "Medium", "HIGH" to "High").forEach { (key, label) ->
+                            FilterChip(
+                                selected = recordingQuality == key,
+                                onClick = { recordingQuality = key },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    val level = RollingRecorder.Level.from(recordingQuality)
+                    Text(
+                        "About ${"%.1f".format(Locale.US, level.hoursFor(recordingLimitMb.toLong() * 1024 * 1024))} hours of video",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Internet access (IPv6)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                         Text(
                             "Watch from anywhere without Tailscale. Encrypted HTTPS on port ${config.remotePort}; " +
@@ -955,7 +1060,10 @@ fun CameraSettingsDialog(
                         tailscaleOnly = tailscaleOnly,
                         remoteEnabled = remoteEnabled,
                         duckDomain = duckDomain.removeSuffix(".duckdns.org"),
-                        duckToken = duckToken
+                        duckToken = duckToken,
+                        recordingEnabled = recordingEnabled,
+                        recordingLimitMb = recordingLimitMb,
+                        recordingQuality = recordingQuality
                     )
                 )
             }) {

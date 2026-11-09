@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.VpnLock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
@@ -115,6 +116,7 @@ fun LiveScreen(
 
     var showInfoSheet by remember { mutableStateOf(false) }
     var showMotionSheet by remember { mutableStateOf(false) }
+    var showRecordingsSheet by remember { mutableStateOf(false) }
 
     BackHandler {
         if (isFullscreen) {
@@ -202,6 +204,9 @@ fun LiveScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = { showRecordingsSheet = true }) {
+                            Icon(Icons.Default.VideoLibrary, contentDescription = "Recordings")
+                        }
                         IconButton(onClick = { showMotionSheet = true }) {
                             Icon(Icons.Default.Tune, contentDescription = "Motion detection settings")
                         }
@@ -502,6 +507,15 @@ fun LiveScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
+        }
+    }
+
+    if (showRecordingsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showRecordingsSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            RecordingsSheet(camera = camera, repository = repository)
         }
     }
 
