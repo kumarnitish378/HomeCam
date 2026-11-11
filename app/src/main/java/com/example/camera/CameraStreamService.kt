@@ -122,8 +122,14 @@ class CameraStreamService : LifecycleService() {
     private fun initService() {
         // 1. Start foreground immediately
         val notification = buildStreamNotification()
+        // The mic can only be used in the background if the service runs with the microphone
+        // type, and Android 14+ refuses that type unless RECORD_AUDIO is granted.
+        val micGranted = ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                (if (micGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
         } else 0
         ServiceCompat.startForeground(this, STREAM_NOTIFICATION_ID, notification, foregroundType)
 

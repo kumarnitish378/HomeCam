@@ -88,6 +88,7 @@ On the live screen:
 
 | Control | What it does |
 |---|---|
+| 🔊 Audio | Plays live sound from the camera phone's microphone (off by default) |
 | Snapshot | Saves the current frame to the viewer's Gallery (`Pictures/HomeCam`) |
 | Torch | Turns the camera phone's flash on or off |
 | Switch lens | Switches between the front and back camera |
@@ -192,6 +193,7 @@ The camera serves plain HTTP on port **8080** (LAN and Tailscale) and, when enab
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/stream.mjpg` | `multipart/x-mixed-replace` MJPEG stream (plays in Chrome) |
+| GET | `/audio.wav` | Live microphone audio, streaming WAV (16 kHz, 16-bit mono). The mic runs only while someone listens |
 | GET | `/snapshot.jpg` | One fresh JPEG (waits up to 3 s for a new frame) |
 | GET | `/status` | JSON with FPS, viewers, battery, temperature, motion, recording, addresses and certificate fingerprint |
 | POST | `/control/torch?on=1` | 204 |
