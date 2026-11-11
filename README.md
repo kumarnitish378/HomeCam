@@ -257,9 +257,10 @@ To release: go to **Releases → Draft a new release**, create a tag such as `v1
 
 ### Signing key
 
-Android installs an update only when it's signed with the same key as the installed app. Until this secret is set, CI signs every build with a **new throwaway key**. In that case you have to uninstall before each update, and in-app updates can't work.
+Android installs an update only when it's signed with the same key as the installed app. CI signs every build with the keystore stored in the **`DEBUG_KEYSTORE_BASE64`** repository secret, so each release installs as an update over the previous one. If the secret is missing, CI falls back to a new throwaway key and logs a warning. Builds signed that way need an uninstall first, and in-app updates can't install them.
 
-Set it up once:
+To set up the secret (already done for this repository):
+
 
 ```bash
 keytool -genkeypair -keystore homecam.keystore -storepass android \
