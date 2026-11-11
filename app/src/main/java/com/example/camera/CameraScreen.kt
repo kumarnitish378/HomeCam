@@ -8,12 +8,9 @@ import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,36 +23,26 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryAlert
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Thermostat
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.VpnLock
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Cameraswitch
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.FiberManualRecord
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +50,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -81,32 +71,38 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.core.NetUtils
-import com.example.core.TlsIdentity
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material3.FilterChip
-import androidx.compose.foundation.horizontalScroll
-import kotlin.math.roundToInt
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import androidx.compose.material.icons.filled.Public
 import com.example.core.SettingsRepository
+import com.example.core.TlsIdentity
 import com.example.pairing.PairingInfo
 import com.example.pairing.QrCodeGenerator
+import com.example.ui.components.CamState
+import com.example.ui.components.Fact
+import com.example.ui.components.ListRow
+import com.example.ui.components.Notice
+import com.example.ui.components.RecordingTag
+import com.example.ui.components.Section
+import com.example.ui.components.StatusRing
+import com.example.ui.theme.AlertAmberDeep
+import com.example.ui.theme.InkNavy
+import com.example.ui.theme.LiveTeal
+import com.example.ui.theme.RecordRed
+import com.example.ui.theme.Slate
+import com.example.ui.theme.TabularNumbers
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -255,31 +251,70 @@ fun CameraScreen(
         } else null
     }
 
+    // Pair-a-viewer opens as its own screen
+    var showPairScreen by remember { mutableStateOf(false) }
+    BackHandler(enabled = showPairScreen) { showPairScreen = false }
+
+    fun regenerateTokenAndRestart() {
+        coroutineScope.launch {
+            token = settingsRepo.regenerateToken()
+            // The running server still checks the old token until it restarts
+            if (FrameBus.isStreaming.value) {
+                context.startService(Intent(context, CameraStreamService::class.java).apply {
+                    action = CameraStreamService.ACTION_STOP
+                })
+                var waited = 0
+                while (FrameBus.isStreaming.value && waited < 5000) {
+                    delay(100); waited += 100
+                }
+                delay(500)
+                startCameraService()
+            }
+            Toast.makeText(context, "New code made. Viewers need to scan it again.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    if (showPairScreen) {
+        PairViewerScreen(
+            qrBitmap = qrBitmap,
+            pairingLink = pairingInfo.toUriString(),
+            token = token,
+            lanIp = lanIp,
+            tailscaleIp = tailscaleIp,
+            selectedHost = selectedHostForQr,
+            onSelectHost = { selectedHostForQr = it },
+            onNewCode = { regenerateTokenAndRestart() },
+            onBack = { showPairScreen = false }
+        )
+        return
+    }
+
+    val ringState = when {
+        !isStreaming -> CamState.OFF
+        cameraError != null -> CamState.PROBLEM
+        else -> CamState.LIVE
+    }
+
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(if (isStreaming) Color(0xFF10B981) else Color(0xFF94A3B8))
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("HomeCam (Caster)")
+                    Column {
+                        Text(config.cameraName, style = MaterialTheme.typography.titleLarge)
+                        Text("Camera", style = MaterialTheme.typography.bodySmall, color = Slate)
                     }
                 },
                 actions = {
                     IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Outlined.Settings, contentDescription = "Settings")
                     }
                     IconButton(onClick = onSwitchToViewer) {
-                        Icon(Icons.Default.Devices, contentDescription = "Switch to Viewer Mode")
+                        Icon(Icons.Outlined.Devices, contentDescription = "Watch my cameras")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         }
@@ -289,529 +324,195 @@ fun CameraScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Streaming Status Hero Card
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isStreaming) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    }
-                ),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.fillMaxWidth()
+            StatusRing(
+                state = ringState,
+                recording = isStreaming && recordingActive,
+                size = 220.dp,
+                description = if (isStreaming) "Camera live, $activeViewers watching" else "Camera off"
             ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    val statusDotColor by animateColorAsState(
-                        targetValue = if (isStreaming) Color(0xFF10B981) else Color(0xFF64748B),
-                        label = "statusDotColor"
-                    )
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(14.dp)
-                                .clip(CircleShape)
-                                .background(statusDotColor)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = if (isStreaming) "STREAMING ACTIVE" else "CAMERA STOPPED",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isStreaming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
+                Text(
+                    text = when (ringState) {
+                        CamState.LIVE -> "Live"
+                        CamState.PROBLEM -> "Live, with a problem"
+                        else -> "Camera off"
+                    },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = if (ringState == CamState.OFF) Slate else InkNavy,
+                    textAlign = TextAlign.Center
+                )
+                if (isStreaming) {
+                    Spacer(Modifier.height(4.dp))
                     Text(
-                        text = if (isStreaming) {
-                            "Running in foreground service. Keep on charger; safe with screen off."
-                        } else {
-                            "Tap start to begin broadcasting MJPEG stream over network."
+                        text = buildString {
+                            append(if (activeViewers == 1) "1 watching" else "$activeViewers watching")
+                            if (activeViewers > 0) append(" · $currentFps fps")
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.bodySmall.merge(TabularNumbers),
+                        color = Slate,
+                        textAlign = TextAlign.Center
                     )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Big Start / Stop Button
-                    if (isStreaming) {
-                        Button(
-                            onClick = {
-                                val stopIntent = Intent(context, CameraStreamService::class.java).apply {
-                                    action = CameraStreamService.ACTION_STOP
-                                }
-                                context.startService(stopIntent)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            ),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Stop Camera Service", style = MaterialTheme.typography.titleMedium)
-                        }
-                    } else {
-                        Button(
-                            onClick = {
-                                if (micGranted()) {
-                                    startCameraService()
-                                } else {
-                                    afterMicPrompt = "start"
-                                    micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            ),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Start Camera Service", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-
-                    if (cameraError != null) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = cameraError ?: "",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                    if (recordingActive) {
+                        Spacer(Modifier.height(6.dp))
+                        RecordingTag()
                     }
                 }
             }
 
-            // Live Telemetry Grid
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                TelemetryChip(
-                    icon = Icons.Default.Visibility,
-                    label = "Viewers",
-                    value = "$activeViewers connected",
-                    modifier = Modifier.weight(1f)
-                )
-                TelemetryChip(
-                    icon = Icons.Default.NetworkCheck,
-                    label = "Frame Rate",
-                    value = "$currentFps fps",
-                    modifier = Modifier.weight(1f)
-                )
+            // One big action
+            if (isStreaming) {
+                OutlinedButton(
+                    onClick = {
+                        context.startService(Intent(context, CameraStreamService::class.java).apply {
+                            action = CameraStreamService.ACTION_STOP
+                        })
+                    },
+                    shape = MaterialTheme.shapes.small,
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, InkNavy),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = InkNavy),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                ) {
+                    Icon(Icons.Filled.Stop, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Stop camera", style = MaterialTheme.typography.labelLarge)
+                }
+            } else {
+                Button(
+                    onClick = {
+                        if (micGranted()) {
+                            startCameraService()
+                        } else {
+                            afterMicPrompt = "start"
+                            micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start camera", style = MaterialTheme.typography.labelLarge)
+                }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                TelemetryChip(
-                    icon = if (isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryAlert,
-                    label = "Battery",
-                    value = "$batteryPercent% ${if (isCharging) "⚡" else ""}",
-                    modifier = Modifier.weight(1f)
-                )
-                TelemetryChip(
-                    icon = Icons.Default.Thermostat,
-                    label = "Temperature",
-                    value = String.format(Locale.US, "%.1f°C", batteryTemp),
-                    alert = isHeatThrottled,
-                    alertText = if (isHeatThrottled) "Heat Throttled (480p/5fps)" else null,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            // Last Motion Banner
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                ),
-                shape = RoundedCornerShape(14.dp),
+            // Facts
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.padding(vertical = 14.dp, horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    Icon(
-                        Icons.Default.Security,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
+                    Fact(
+                        value = "$batteryPercent%",
+                        label = if (isCharging) "Battery, charging" else "Battery",
+                        modifier = Modifier.weight(1f),
+                        valueColor = if (!isCharging && batteryPercent < 20) RecordRed else InkNavy
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("Motion Detection", style = MaterialTheme.typography.labelMedium)
-                        val lastMotionText = when {
-                            !config.motionEnabled -> "Off (turn on in Settings)"
-                            lastMotion > 0L -> {
-                                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastMotion))
-                                "Last event at $timeStr"
-                            }
-                            else -> "Monitoring active (cooldown ${config.motionCooldownSec}s)"
-                        }
-                        Text(
-                            text = lastMotionText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // QR Code Pairing Card
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                border = CardDefaults.outlinedCardBorder(),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.QrCode, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Pair Viewer Phone",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        IconButton(onClick = {
-                            coroutineScope.launch {
-                                token = settingsRepo.regenerateToken()
-                                Toast.makeText(context, "New token generated. Viewers unpaired.", Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Regenerate Token")
-                        }
-                    }
-
-                    Text(
-                        text = "Scan this QR code with HomeCam in Viewer mode on your other phone.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
+                    Fact(
+                        value = "${batteryTemp.roundToInt()}°C",
+                        label = if (isHeatThrottled) "Hot, slowed down" else "Temperature",
+                        modifier = Modifier.weight(1f),
+                        valueColor = if (isHeatThrottled) AlertAmberDeep else InkNavy
                     )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // QR Image
-                    if (qrBitmap != null) {
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = Color.White,
-                            shadowElevation = 2.dp,
-                            modifier = Modifier.padding(8.dp)
-                        ) {
-                            Image(
-                                bitmap = qrBitmap.asImageBitmap(),
-                                contentDescription = "Pairing QR Code",
-                                modifier = Modifier
-                                    .size(210.dp)
-                                    .padding(12.dp)
-                            )
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(210.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("Generating QR...", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Network IP Selector Chips
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        if (tailscaleIp != null) {
-                            FilterChipCustom(
-                                label = "Tailscale: $tailscaleIp",
-                                isSelected = selectedHostForQr == tailscaleIp,
-                                icon = Icons.Default.VpnLock,
-                                onClick = { selectedHostForQr = tailscaleIp!! }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        if (lanIp != null) {
-                            FilterChipCustom(
-                                label = "LAN: $lanIp",
-                                isSelected = selectedHostForQr == lanIp,
-                                icon = Icons.Default.Wifi,
-                                onClick = { selectedHostForQr = lanIp!! }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Copy URI button
-                    OutlinedButton(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = ClipData.newPlainText("HomeCam Pairing URI", pairingInfo.toUriString())
-                            clipboard.setPrimaryClip(clip)
-                            Toast.makeText(context, "Pairing link copied to clipboard", Toast.LENGTH_SHORT).show()
+                    Fact(
+                        value = when {
+                            !config.motionEnabled -> "Off"
+                            lastMotion > 0 -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(lastMotion))
+                            else -> "On"
                         },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Copy Pairing Link")
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Show / Hide Token
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { isTokenVisible = !isTokenVisible }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            if (isTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Key,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isTokenVisible) token else "Show Token (Hidden for Security)",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = if (isTokenVisible) FontFamily.Monospace else FontFamily.Default,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                        label = if (config.motionEnabled && lastMotion > 0) "Last motion" else "Motion",
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
-            // Microphone problem (no permission, or service started before it was granted)
+            // Problems, only when there is one
+            if (isStreaming && cameraError != null) {
+                Notice(title = "Camera problem", body = cameraError!!)
+            }
             if (isStreaming && (!micPermission || !serviceHasMic || audioError != null)) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Live audio is off", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            when {
-                                !micPermission -> "HomeCam needs microphone permission so viewers can hear this camera."
-                                !serviceHasMic -> "Microphone permission was given after the camera started. Restart to turn audio on."
-                                else -> audioError.orEmpty()
-                            },
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        if (!micPermission || !serviceHasMic) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            FilledTonalButton(onClick = {
-                                afterMicPrompt = "restart"
-                                micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                            }) {
-                                Text(if (!micPermission) "Allow microphone & restart" else "Restart camera")
-                            }
-                        }
+                Notice(
+                    title = "Live audio is off",
+                    body = when {
+                        !micPermission -> "Allow the microphone so viewers can hear this camera."
+                        !serviceHasMic -> "The microphone was allowed after the camera started. Restart to turn audio on."
+                        else -> audioError.orEmpty()
+                    },
+                    actionLabel = when {
+                        !micPermission -> "Allow microphone and restart"
+                        !serviceHasMic -> "Restart camera"
+                        else -> null
+                    },
+                    onAction = {
+                        afterMicPrompt = "restart"
+                        micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                     }
-                }
-            }
-
-            // Loop recording status
-            if (config.recordingEnabled) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isStreaming && recordingError != null) {
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        }
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.FiberManualRecord,
-                                contentDescription = null,
-                                tint = if (recordingActive) Color(0xFFEF4444) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                if (recordingActive) "Recording to this phone" else "Loop recording",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = when {
-                                !isStreaming -> "Starts with the camera service."
-                                recordingError != null -> recordingError!!
-                                else -> "Used ${"%.2f".format(Locale.US, recordingUsed / (1024f * 1024 * 1024))} GB " +
-                                    "of ${"%.1f".format(Locale.US, config.recordingLimitMb / 1024f)} GB. " +
-                                    "Oldest video is deleted automatically. Live video is only sent while a viewer is watching."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isStreaming && recordingError != null) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // Internet (IPv6) access status
-            if (config.remoteEnabled) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (remoteError != null) {
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        }
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Internet access (IPv6, no Tailscale)",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = if (remoteHostForQr.isNotBlank()) {
-                                "https://${NetUtils.hostForUrl(remoteHostForQr)}:${config.remotePort}"
-                            } else {
-                                "No public IPv6 address found on Wi-Fi yet."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = when {
-                                !isStreaming -> "Starts with the camera service."
-                                remoteError != null -> remoteError!!
-                                else -> "Included in the pairing QR. Allow inbound TCP ${config.remotePort} " +
-                                    "for this phone in the router's IPv6 firewall."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isStreaming && remoteError != null) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // Battery Optimization Alert Banner
-            AnimatedVisibility(visible = showBatteryOptimizationBanner) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.BatteryAlert, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "24/7 Background Running",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            "Disable battery optimization so Android does not kill the camera service when the screen turns off.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { showBatteryOptimizationBanner = false }) {
-                                Text("Dismiss")
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            FilledTonalButton(onClick = {
-                                try {
-                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                        data = Uri.parse("package:${context.packageName}")
-                                    }
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {
-                                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    context.startActivity(intent)
-                                }
-                                showBatteryOptimizationBanner = false
-                            }) {
-                                Text("Allow Unrestricted")
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Quick Hardware Lens Flip
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Active Lens: ${currentLensFacing.uppercase()}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
                 )
-                OutlinedButton(
+            }
+            if (showBatteryOptimizationBanner) {
+                Notice(
+                    title = "Let HomeCam run in the background",
+                    body = "Without this, Android may stop the camera when the screen turns off.",
+                    actionLabel = "Allow",
+                    onAction = {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            })
+                        } catch (_: Exception) {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
+                        showBatteryOptimizationBanner = false
+                    }
+                )
+            }
+
+            // Everything else as one list
+            Section {
+                ListRow(
+                    title = "Pair a viewer phone",
+                    subtitle = "Show the code to scan",
+                    icon = Icons.Outlined.QrCode2,
+                    onClick = { showPairScreen = true }
+                )
+                ListRow(
+                    title = "Recording",
+                    subtitle = when {
+                        !config.recordingEnabled -> "Off"
+                        isStreaming && recordingError != null -> recordingError
+                        else -> "${"%.1f".format(Locale.US, recordingUsed / (1024f * 1024 * 1024))} of " +
+                            "${config.recordingLimitMb / 1024} GB used · oldest video deleted first"
+                    },
+                    icon = Icons.Outlined.FiberManualRecord,
+                    iconTint = if (recordingActive) RecordRed else InkNavy,
+                    onClick = { showSettingsDialog = true }
+                )
+                ListRow(
+                    title = "Internet access (IPv6)",
+                    subtitle = when {
+                        !config.remoteEnabled -> "Off · watch from outside without Tailscale"
+                        isStreaming && remoteError != null -> remoteError
+                        remoteHostForQr.isNotBlank() -> "https://${NetUtils.hostForUrl(remoteHostForQr)}:${config.remotePort}"
+                        else -> "Looking for a public IPv6 address..."
+                    },
+                    icon = Icons.Outlined.Public,
+                    iconTint = if (config.remoteEnabled && remoteError != null && isStreaming) AlertAmberDeep else InkNavy,
+                    onClick = { showSettingsDialog = true }
+                )
+                ListRow(
+                    title = "Lens",
+                    subtitle = if (currentLensFacing.equals("FRONT", true)) "Front camera" else "Back camera",
+                    icon = Icons.Outlined.Cameraswitch,
                     onClick = {
                         val newFacing = if (currentLensFacing.equals("FRONT", ignoreCase = true)) "BACK" else "FRONT"
                         coroutineScope.launch {
@@ -819,13 +520,18 @@ fun CameraScreen(
                             FrameBus.controlCommands.tryEmit("LENS_$newFacing")
                         }
                     },
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Cameraswitch, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Switch Lens")
-                }
+                    trailing = { Text("Switch", style = MaterialTheme.typography.labelLarge, color = LiveTeal) }
+                )
+                ListRow(
+                    title = "Settings",
+                    subtitle = "Name, quality, motion, network",
+                    icon = Icons.Outlined.Settings,
+                    showDivider = false,
+                    onClick = { showSettingsDialog = true }
+                )
             }
+
+            Spacer(Modifier.height(8.dp))
         }
     }
 
@@ -862,90 +568,149 @@ fun CameraScreen(
     }
 }
 
+/** Full screen with the pairing QR, chosen address, copy link and "new code". */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FilterChipCustom(
-    label: String,
-    isSelected: Boolean,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit
+fun PairViewerScreen(
+    qrBitmap: android.graphics.Bitmap?,
+    pairingLink: String,
+    token: String,
+    lanIp: String?,
+    tailscaleIp: String?,
+    selectedHost: String,
+    onSelectHost: (String) -> Unit,
+    onNewCode: () -> Unit,
+    onBack: () -> Unit
 ) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-        modifier = Modifier.clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+    val context = LocalContext.current
+    var isTokenVisible by remember { mutableStateOf(false) }
+    var confirmNewCode by remember { mutableStateOf(false) }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text("Pair a viewer", style = MaterialTheme.typography.titleLarge) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                modifier = Modifier.size(14.dp),
-                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                "Open HomeCam on the phone you watch from, tap Add camera, and scan this.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = InkNavy,
+                textAlign = TextAlign.Center
             )
+
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = androidx.compose.ui.graphics.Color.White,
+                shadowElevation = 1.dp
+            ) {
+                Box(Modifier.padding(20.dp), contentAlignment = Alignment.Center) {
+                    if (qrBitmap != null) {
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = "Pairing code",
+                            modifier = Modifier.size(240.dp)
+                        )
+                    } else {
+                        Box(Modifier.size(240.dp), contentAlignment = Alignment.Center) {
+                            Text("Making the code...", style = MaterialTheme.typography.bodyMedium, color = Slate)
+                        }
+                    }
+                }
+            }
+
+            // Which address goes first in the code. The code carries all of them anyway.
+            val choices = listOfNotNull(
+                lanIp?.let { "Home Wi-Fi" to it },
+                tailscaleIp?.let { "Tailscale" to it }
+            )
+            if (choices.size > 1) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    choices.forEachIndexed { i, (label, ip) ->
+                        SegmentedButton(
+                            selected = selectedHost == ip,
+                            onClick = { onSelectHost(ip) },
+                            shape = SegmentedButtonDefaults.itemShape(i, choices.size)
+                        ) { Text(label) }
+                    }
+                }
+            }
+            Text(
+                "The code works on home Wi-Fi, Tailscale and internet access, whichever reaches the camera.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Slate,
+                textAlign = TextAlign.Center
+            )
+
+            OutlinedButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("HomeCam pairing link", pairingLink))
+                    Toast.makeText(context, "Pairing link copied", Toast.LENGTH_SHORT).show()
+                },
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Copy pairing link", style = MaterialTheme.typography.labelLarge)
+            }
+
+            Section {
+                ListRow(
+                    title = if (isTokenVisible) token else "Access code hidden",
+                    subtitle = if (isTokenVisible) "Anyone with this code can watch" else "Tap to show",
+                    icon = if (isTokenVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Key,
+                    onClick = { isTokenVisible = !isTokenVisible },
+                    trailing = {}
+                )
+                ListRow(
+                    title = "New code",
+                    subtitle = "Disconnects all viewers",
+                    icon = Icons.Outlined.Refresh,
+                    iconTint = RecordRed,
+                    showDivider = false,
+                    onClick = { confirmNewCode = true }
+                )
+            }
         }
     }
-}
 
-@Composable
-fun TelemetryChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String,
-    alert: Boolean = false,
-    alertText: String? = null,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (alert) {
-                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+    if (confirmNewCode) {
+        AlertDialog(
+            onDismissRequest = { confirmNewCode = false },
+            title = { Text("Make a new code?") },
+            text = { Text("Every phone paired with this camera will stop working until it scans the new code.") },
+            confirmButton = {
+                TextButton(onClick = { confirmNewCode = false; onNewCode() }) {
+                    Text("Make new code", color = RecordRed)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmNewCode = false }) { Text("Cancel") }
             }
-        ),
-        modifier = modifier
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = if (alert) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = if (alert) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-            )
-            if (alertText != null) {
-                Text(
-                    text = alertText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        }
+        )
     }
 }
 
@@ -971,7 +736,7 @@ fun CameraSettingsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Camera Settings") },
+        title = { Text("Camera settings") },
         text = {
             Column(
                 modifier = Modifier
@@ -982,7 +747,7 @@ fun CameraSettingsDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Camera Name") },
+                    label = { Text("Camera name") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -990,14 +755,14 @@ fun CameraSettingsDialog(
                 OutlinedTextField(
                     value = portText,
                     onValueChange = { portText = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("HTTP Port") },
+                    label = { Text("Port") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
 
                 HorizontalDivider()
 
-                Text("Max Frame Rate: $fps fps", style = MaterialTheme.typography.bodyMedium)
+                Text("Live video: up to $fps fps", style = MaterialTheme.typography.bodyMedium)
                 Slider(
                     value = fps.toFloat(),
                     onValueChange = { fps = it.toInt() },
@@ -1005,7 +770,7 @@ fun CameraSettingsDialog(
                     steps = 18
                 )
 
-                Text("JPEG Quality: $quality%", style = MaterialTheme.typography.bodyMedium)
+                Text("Live picture quality: $quality%", style = MaterialTheme.typography.bodyMedium)
                 Slider(
                     value = quality.toFloat(),
                     onValueChange = { quality = it.toInt() },
@@ -1040,8 +805,8 @@ fun CameraSettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Tailscale Only", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                        Text("Drops LAN access for security on public/shared Wi-Fi", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Tailscale only", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text("Ignore viewers on the same Wi-Fi. Use on Wi-Fi you don't trust.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(
                         checked = tailscaleOnly,
@@ -1162,7 +927,7 @@ fun CameraSettingsDialog(
                     )
                 )
             }) {
-                Text("Save")
+                Text("Save settings")
             }
         },
         dismissButton = {
