@@ -2,19 +2,38 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val CyanPrimaryDark = Color(0xFF38BDF8)
-val CyanPrimaryLight = Color(0xFF0284C7)
+/*
+ * HomeCam palette: a calm, daylight "home intercom panel" look.
+ * Colour carries meaning, so each status colour is used for one thing only.
+ */
 
-val TealSecondaryDark = Color(0xFF2DD4BF)
-val TealSecondaryLight = Color(0xFF0F766E)
+/** App background */
+val Porcelain = Color(0xFFF3F5F7)
+/** Cards, sheets, bars */
+val Surface = Color(0xFFFFFFFF)
+/** Main text and icons */
+val InkNavy = Color(0xFF14213D)
+/** Secondary text, inactive icons */
+val Slate = Color(0xFF6B7785)
+/** Hairlines and dividers */
+val Mist = Color(0xFFE1E6EB)
+/** Off / unknown state (ring, pills) */
+val Pebble = Color(0xFFA9B3BE)
 
-val AmberAlertDark = Color(0xFFFBBF24)
-val AmberAlertLight = Color(0xFFD97706)
+/** Live, connected, OK, primary actions */
+val LiveTeal = Color(0xFF0F9D8A)
+val LiveTealTint = Color(0xFFDDF3EF)
+val LiveTealDeep = Color(0xFF0B6E61)
 
-val DarkSurface = Color(0xFF0F172A)
-val DarkBackground = Color(0xFF0B1120)
-val DarkCardSurface = Color(0xFF1E293B)
+/** Recording only (dot, arc, "Recording now") */
+val RecordRed = Color(0xFFE5383B)
+val RecordRedTint = Color(0xFFFCE4E4)
 
-val LightSurface = Color(0xFFFFFFFF)
-val LightBackground = Color(0xFFF8FAFC)
-val LightCardSurface = Color(0xFFF1F5F9)
+/** Motion and warnings */
+val AlertAmber = Color(0xFFF2A33A)
+val AlertAmberTint = Color(0xFFFDF0DC)
+val AlertAmberDeep = Color(0xFF8A5400)
+
+/** Dark surfaces for the live video screen */
+val VideoBlack = Color(0xFF0E1726)
+val VideoScrim = Color(0xCC0E1726)
