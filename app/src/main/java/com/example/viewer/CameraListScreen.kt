@@ -1,8 +1,9 @@
 package com.example.viewer
 
+import android.graphics.Bitmap
 import android.widget.Toast
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,31 +21,29 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VpnLock
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.outlined.VideocamOff
+import androidx.compose.material.icons.outlined.VpnLock
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -64,12 +64,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.ui.components.CamState
+import com.example.ui.components.InfoChip
+import com.example.ui.components.RecordingTag
+import com.example.ui.components.StatusPill
+import com.example.ui.theme.InkNavy
+import com.example.ui.theme.LiveTeal
+import com.example.ui.theme.Mist
+import com.example.ui.theme.Pebble
+import com.example.ui.theme.RecordRed
+import com.example.ui.theme.Slate
+import com.example.ui.theme.TabularNumbers
+import com.example.ui.theme.VideoBlack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
+/** Viewer home: one tile per camera with a recent picture and its state. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraListScreen(
@@ -82,43 +101,42 @@ fun CameraListScreen(
     val coroutineScope = rememberCoroutineScope()
     val cameras by repository.cameras.collectAsState(initial = emptyList())
 
-    // Polled status map for each camera (every 10s)
     val statusMap = remember { mutableStateMapOf<String, CameraStatus>() }
+    val thumbnails = remember { mutableStateMapOf<String, Bitmap>() }
 
     var showManualAddDialog by remember { mutableStateOf(false) }
     var cameraToEdit by remember { mutableStateOf<CameraItem?>(null) }
     var cameraToDelete by remember { mutableStateOf<CameraItem?>(null) }
 
-    // Poll /status for all saved cameras every 10 seconds while screen is open
+    // Status every 10 s; a fresh thumbnail every 30 s for cameras that are live
     LaunchedEffect(cameras) {
+        var round = 0
         while (true) {
             for (camera in cameras) {
                 val status = repository.fetchStatus(camera)
                 statusMap[camera.id] = status
+                if (status.isOnline && (round % 3 == 0 || thumbnails[camera.id] == null)) {
+                    repository.fetchSnapshot(camera)?.let { thumbnails[camera.id] = it }
+                }
             }
+            round++
             delay(10_000)
         }
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("HomeCam Viewer") },
+                title = { Text("My cameras", style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     IconButton(onClick = onSwitchToCamera) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = "Switch to Camera Mode")
+                        Icon(Icons.Outlined.PhoneAndroid, contentDescription = "Use this phone as a camera")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background
                 )
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onScanQr,
-                icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
-                text = { Text("Scan QR") }
             )
         }
     ) { padding ->
@@ -135,64 +153,67 @@ fun CameraListScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${cameras.size} Saved Cameras",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        TextButton(onClick = { showManualAddDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Add Manually")
-                        }
-                    }
-                }
-
                 items(cameras, key = { it.id }) { camera ->
-                    val status = statusMap[camera.id] ?: CameraStatus()
-                    CameraCardItem(
+                    CameraTile(
                         camera = camera,
-                        status = status,
+                        status = statusMap[camera.id] ?: CameraStatus(),
+                        thumbnail = thumbnails[camera.id],
                         onClick = { onSelectCamera(camera) },
                         onEdit = { cameraToEdit = camera },
                         onDelete = { cameraToDelete = camera }
                     )
                 }
-
                 item {
-                    Spacer(modifier = Modifier.height(72.dp)) // Clearance for FAB
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Button(
+                            onClick = onScanQr,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp)
+                        ) {
+                            Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Add camera", style = MaterialTheme.typography.labelLarge)
+                        }
+                        OutlinedButton(
+                            onClick = { showManualAddDialog = true },
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.height(52.dp)
+                        ) {
+                            Icon(Icons.Outlined.Keyboard, contentDescription = "Type camera details")
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
                 }
             }
         }
     }
 
-    // Manual Add Dialog
     if (showManualAddDialog) {
         ManualCameraDialog(
             initialName = "",
             initialHost = "",
             initialPort = 8080,
             initialToken = "",
-            title = "Add Camera Manually",
+            title = "Add camera by hand",
             onDismiss = { showManualAddDialog = false },
             onConfirm = { name, host, port, token ->
                 coroutineScope.launch {
-                    val item = CameraItem(
-                        name = name.ifBlank { "HomeCam" },
-                        host = host.trim(),
-                        port = port,
-                        token = token.trim()
+                    repository.addCamera(
+                        CameraItem(
+                            name = name.ifBlank { "HomeCam" },
+                            host = host.trim(),
+                            port = port,
+                            token = token.trim()
+                        )
                     )
-                    repository.addCamera(item)
                     showManualAddDialog = false
                     Toast.makeText(context, "Camera added", Toast.LENGTH_SHORT).show()
                 }
@@ -200,17 +221,17 @@ fun CameraListScreen(
         )
     }
 
-    // Edit Name Dialog
     cameraToEdit?.let { camera ->
         var newName by remember { mutableStateOf(camera.name) }
         AlertDialog(
             onDismissRequest = { cameraToEdit = null },
-            title = { Text("Rename Camera") },
+            title = { Text("Rename camera") },
             text = {
                 OutlinedTextField(
                     value = newName,
                     onValueChange = { newName = it },
-                    label = { Text("Camera Name") },
+                    label = { Text("Name") },
+                    placeholder = { Text("Front gate") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -221,24 +242,19 @@ fun CameraListScreen(
                         repository.updateCameraName(camera.id, newName.ifBlank { camera.name })
                         cameraToEdit = null
                     }
-                }) {
-                    Text("Save")
-                }
+                }) { Text("Rename") }
             },
             dismissButton = {
-                TextButton(onClick = { cameraToEdit = null }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { cameraToEdit = null }) { Text("Cancel") }
             }
         )
     }
 
-    // Delete Confirmation Dialog
     cameraToDelete?.let { camera ->
         AlertDialog(
             onDismissRequest = { cameraToDelete = null },
-            title = { Text("Delete Camera") },
-            text = { Text("Remove \"${camera.name}\" from your saved cameras list?") },
+            title = { Text("Remove ${camera.name}?") },
+            text = { Text("It disappears from this phone. The camera keeps running; scan its code to add it again.") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -247,218 +263,157 @@ fun CameraListScreen(
                             cameraToDelete = null
                         }
                     },
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Delete")
-                }
+                    colors = ButtonDefaults.buttonColors(containerColor = RecordRed)
+                ) { Text("Remove") }
             },
             dismissButton = {
-                TextButton(onClick = { cameraToDelete = null }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { cameraToDelete = null }) { Text("Cancel") }
             }
         )
     }
 }
 
+/** A camera: recent picture on top, name and state below. Long-press for rename/remove. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun CameraCardItem(
+fun CameraTile(
     camera: CameraItem,
     status: CameraStatus,
+    thumbnail: Bitmap?,
     onClick: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val state = when {
+        !status.checked -> CamState.CHECKING
+        status.isOnline && status.cameraError != null -> CamState.PROBLEM
+        status.isOnline -> CamState.LIVE
+        else -> CamState.OFF
+    }
+    val route = status.route ?: if (camera.isTailscale) Route.TAILSCALE else Route.LAN
 
-    val dotColor by animateColorAsState(
-        targetValue = if (status.isOnline) Color(0xFF10B981) else Color(0xFF94A3B8),
-        label = "dotColor"
-    )
-
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 1.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onEdit
-            )
+            .clip(MaterialTheme.shapes.large)
+            .combinedClickable(onClick = onClick, onLongClick = { menuExpanded = true })
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+        Column {
+            // Picture
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .background(if (thumbnail != null) VideoBlack else Mist),
+                contentAlignment = Alignment.Center
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Online indicator dot
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(dotColor)
+                if (thumbnail != null) {
+                    Image(
+                        bitmap = thumbnail.asImageBitmap(),
+                        contentDescription = "Latest picture from ${camera.name}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                        alpha = if (state == CamState.OFF) 0.4f else 1f
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = camera.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                } else {
+                    Icon(
+                        if (state == CamState.OFF) Icons.Outlined.VideocamOff else Icons.Outlined.Videocam,
+                        contentDescription = null,
+                        tint = Pebble,
+                        modifier = Modifier.size(40.dp)
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    StreamStateBadge(status)
                 }
-
-                Box {
-                    IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Options")
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Rename") },
-                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                            onClick = {
-                                menuExpanded = false
-                                onEdit()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                            onClick = {
-                                menuExpanded = false
-                                onDelete()
-                            }
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Address and network type chip
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Route actually in use when online; otherwise the paired address type
-                val route = status.route ?: if (camera.isTailscale) Route.TAILSCALE else Route.LAN
-                val routeTint = if (route == Route.LAN) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (route == Route.LAN) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            when (route) {
-                                Route.TAILSCALE -> Icons.Default.VpnLock
-                                Route.INTERNET -> Icons.Default.Public
-                                Route.LAN -> Icons.Default.Wifi
-                            },
-                            contentDescription = null,
-                            modifier = Modifier.size(12.dp),
-                            tint = routeTint
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = route.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = routeTint
-                        )
-                    }
-                }
-
-                Text(
-                    text = "${camera.host}:${camera.port}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                StatusPill(
+                    state = state,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(12.dp)
+                )
+                InfoChip(
+                    text = route.label,
+                    icon = when (route) {
+                        Route.TAILSCALE -> Icons.Outlined.VpnLock
+                        Route.INTERNET -> Icons.Outlined.Public
+                        Route.LAN -> Icons.Outlined.Wifi
+                    },
+                    dark = true,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
                 )
             }
 
-            if (status.isOnline) {
-                Spacer(modifier = Modifier.height(6.dp))
-                StreamDetailsRow(status)
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Telemetry snippet
+            // Name and state
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (status.isOnline) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "${status.fps} fps",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = " · ",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "${status.battery}% ${if (status.isCharging) "⚡" else ""}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        if (status.temperature > 0) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        camera.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = InkNavy,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    when (state) {
+                        CamState.LIVE, CamState.PROBLEM -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (status.recording) {
+                                RecordingTag()
+                                Text("  ·  ", style = MaterialTheme.typography.bodySmall, color = Slate)
+                            }
                             Text(
-                                text = " · ${status.temperature.toInt()}°C",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (status.isHeatThrottled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                text = buildString {
+                                    append(if (status.viewers == 1) "1 watching" else "${status.viewers} watching")
+                                    if (!status.motionEnabled) append("  ·  Motion off")
+                                    else if (status.lastMotion > 0) append(
+                                        "  ·  Motion " + SimpleDateFormat("HH:mm", Locale.getDefault())
+                                            .format(Date(status.lastMotion))
+                                    )
+                                },
+                                style = MaterialTheme.typography.bodySmall.merge(TabularNumbers),
+                                color = Slate,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
-                    }
-                } else {
-                    Text(
-                        text = when {
-                            !status.checked -> "Checking camera..."
-                            else -> "Camera not reachable · rechecking every 10 s"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Videocam,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
+                        CamState.CHECKING -> Text("Checking...", style = MaterialTheme.typography.bodySmall, color = Slate)
+                        CamState.OFF -> Text(
+                            "Can't reach this camera. Checking again every 10 s.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Slate,
+                            maxLines = 2
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    if (state == CamState.PROBLEM) {
                         Text(
-                            "Watch Live",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            status.cameraError.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = com.example.ui.theme.AlertAmberDeep,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "More for ${camera.name}", tint = Slate)
+                    }
+                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                            onClick = { menuExpanded = false; onEdit() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Remove", color = RecordRed) },
+                            leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = RecordRed) },
+                            onClick = { menuExpanded = false; onDelete() }
                         )
                     }
                 }
@@ -467,6 +422,7 @@ fun CameraCardItem(
     }
 }
 
+/** No cameras yet: one clear next step. */
 @Composable
 fun EmptyCamerasView(
     modifier: Modifier = Modifier,
@@ -478,56 +434,38 @@ fun EmptyCamerasView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(88.dp)
+        Box(
+            Modifier
+                .size(88.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Mist),
+            contentAlignment = Alignment.Center
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Default.Videocam,
-                    contentDescription = null,
-                    modifier = Modifier.size(44.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
+            Icon(Icons.Outlined.Videocam, null, Modifier.size(40.dp), tint = Slate)
         }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
+        Spacer(Modifier.height(20.dp))
+        Text("No cameras yet", style = MaterialTheme.typography.headlineSmall, color = InkNavy)
+        Spacer(Modifier.height(8.dp))
         Text(
-            text = "No Cameras Added Yet",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Install HomeCam on another phone, start Camera mode, and scan its QR code to begin watching live.",
+            "On the camera phone, open HomeCam, tap Pair a viewer phone, then scan the code here.",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            color = Slate,
+            textAlign = TextAlign.Center
         )
-
-        Spacer(modifier = Modifier.height(28.dp))
-
+        Spacer(Modifier.height(24.dp))
         Button(
             onClick = onScanQr,
-            shape = RoundedCornerShape(14.dp),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp)
+                .height(52.dp)
         ) {
-            Icon(Icons.Default.QrCodeScanner, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Scan QR Code to Pair")
+            Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Scan camera code", style = MaterialTheme.typography.labelLarge)
         }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
         TextButton(onClick = onAddManual) {
-            Text("Or Add Address Manually")
+            Text("Type the details instead", color = LiveTeal)
         }
     }
 }
@@ -555,21 +493,19 @@ fun ManualCameraDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Camera Name") },
-                    placeholder = { Text("e.g. Front Gate, Living Room") },
+                    label = { Text("Name") },
+                    placeholder = { Text("Front gate") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
-                    label = { Text("IP Address or Host") },
-                    placeholder = { Text("100.x.x.x or 192.168.x.x") },
+                    label = { Text("Camera address") },
+                    placeholder = { Text("192.168.31.201 or 100.x.x.x") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-
                 OutlinedTextField(
                     value = portText,
                     onValueChange = { portText = it.filter { c -> c.isDigit() } },
@@ -577,12 +513,11 @@ fun ManualCameraDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-
                 OutlinedTextField(
                     value = token,
                     onValueChange = { token = it },
-                    label = { Text("Access Token") },
-                    placeholder = { Text("32-character token from camera") },
+                    label = { Text("Access code") },
+                    placeholder = { Text("On the camera: Pair a viewer phone") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -590,61 +525,12 @@ fun ManualCameraDialog(
         },
         confirmButton = {
             Button(
-                onClick = {
-                    val port = portText.toIntOrNull() ?: 8080
-                    onConfirm(name, host, port, token)
-                },
+                onClick = { onConfirm(name, host, portText.toIntOrNull() ?: 8080, token) },
                 enabled = host.isNotBlank() && token.isNotBlank()
-            ) {
-                Text("Save Camera")
-            }
+            ) { Text("Add camera") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
-    )
-}
-
-/**
- * LIVE / OFFLINE / CHECKING pill for a camera card. "LIVE" means the camera service is running
- * and answering, so the stream can be opened right now.
- */
-@Composable
-fun StreamStateBadge(status: CameraStatus) {
-    val (label, fg, bg) = when {
-        !status.checked -> Triple("CHECKING", MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.surfaceVariant)
-        status.isOnline -> Triple("LIVE", Color(0xFF065F46), Color(0xFFD1FAE5))
-        else -> Triple("OFFLINE", Color(0xFF991B1B), Color(0xFFFEE2E2))
-    }
-    Surface(shape = RoundedCornerShape(6.dp), color = bg) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = fg,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-        )
-    }
-}
-
-/** One line under the address: recording, people watching, last motion. Only when LIVE. */
-@Composable
-fun StreamDetailsRow(status: CameraStatus) {
-    if (!status.isOnline) return
-    val parts = buildList {
-        add(if (status.recording) "● Recording" else "Not recording")
-        add(if (status.viewers == 1) "1 watching" else "${status.viewers} watching")
-        if (!status.motionEnabled) add("Motion off")
-        else if (status.lastMotion > 0) {
-            add("Motion " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                .format(java.util.Date(status.lastMotion)))
-        }
-    }
-    Text(
-        text = parts.joinToString("  ·  "),
-        style = MaterialTheme.typography.bodySmall,
-        color = if (status.recording) Color(0xFFDC2626) else MaterialTheme.colorScheme.onSurfaceVariant
     )
 }

@@ -4,68 +4,80 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.example.ui.theme.AlertAmber
+import com.example.ui.theme.AlertAmberDeep
+import com.example.ui.theme.AlertAmberTint
+import com.example.ui.theme.InkNavy
+import com.example.ui.theme.LiveTeal
+import com.example.ui.theme.LiveTealTint
+import com.example.ui.theme.Mist
+import com.example.ui.theme.RecordRed
+import com.example.ui.theme.RecordRedTint
+import com.example.ui.theme.Slate
+import com.example.ui.theme.TabularNumbers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-private val LIMIT_CHOICES_MB = listOf(1024, 2048, 4096, 8192, 16384)
-private val QUALITY_CHOICES = listOf("LOW" to "Low", "MEDIUM" to "Medium", "HIGH" to "High")
+private const val SEGMENT_MS = 5 * 60 * 1000L
 
 /** Average bitrates matching the camera's RollingRecorder levels (bits per second). */
-private fun bitrateFor(quality: String): Int = when (quality) {
+internal fun bitrateFor(quality: String): Int = when (quality) {
     "LOW" -> 600_000
     "HIGH" -> 2_500_000
     else -> 1_200_000
 }
 
-private fun formatSize(bytes: Long): String =
+internal fun formatSize(bytes: Long): String =
     if (bytes >= 1024L * 1024 * 1024) String.format(Locale.US, "%.1f GB", bytes / (1024f * 1024 * 1024))
     else String.format(Locale.US, "%.0f MB", bytes / (1024f * 1024))
 
 /**
- * Loop-recording settings for a camera plus its list of recorded segments.
- * Tapping a segment downloads it (over whichever route is active) and opens it in a video player.
+ * Recorded clips as a timeline grouped by day. Clips with motion get an amber marker; the clip
+ * being written now is shown first in red. Tap a clip to download and play it.
  */
 @Composable
 fun RecordingsSheet(camera: CameraItem, repository: CameraRepository) {
@@ -73,210 +85,229 @@ fun RecordingsSheet(camera: CameraItem, repository: CameraRepository) {
     val scope = rememberCoroutineScope()
 
     var loaded by remember { mutableStateOf(false) }
+    var reachable by remember { mutableStateOf(true) }
     var config by remember { mutableStateOf<RecordingConfig?>(null) }
     var recordings by remember { mutableStateOf<List<RecordingItem>>(emptyList()) }
-    var enabled by remember { mutableStateOf(true) }
-    var limitMb by remember { mutableStateOf(2048) }
-    var quality by remember { mutableStateOf("MEDIUM") }
-    var saving by remember { mutableStateOf(false) }
+    var motionTimes by remember { mutableStateOf<List<Long>>(emptyList()) }
     var downloading by remember { mutableStateOf<String?>(null) }
-    var progress by remember { mutableStateOf(0f) }
+    var progress by remember { mutableFloatStateOf(0f) }
 
-    suspend fun reload() {
-        val c = repository.fetchRecordingConfig(camera)
-        config = c
-        if (c != null) {
-            enabled = c.enabled
-            limitMb = c.limitMb
-            quality = c.quality
-        }
-        recordings = repository.listRecordings(camera).orEmpty()
+    LaunchedEffect(camera.id) {
+        config = repository.fetchRecordingConfig(camera)
+        val list = repository.listRecordings(camera)
+        reachable = list != null
+        recordings = list.orEmpty()
+        motionTimes = repository.fetchMotionTimes(camera)
         loaded = true
     }
 
-    LaunchedEffect(camera.id) { reload() }
+    // Group by day, newest first (the camera already lists newest first)
+    val groups = remember(recordings) {
+        recordings.groupBy { dayLabel(it.startMillis) }.toList()
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Text("Recording", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Recordings", style = MaterialTheme.typography.headlineSmall, color = InkNavy)
+            config?.let { c ->
+                val hours = c.limitMb.toLong() * 1024 * 1024 * 8f / bitrateFor(c.quality) / 3600f
+                Text(
+                    if (c.enabled) {
+                        "${formatSize(c.usedBytes)} of ${c.limitMb / 1024} GB · keeps about " +
+                            "${String.format(Locale.US, "%.0f", hours)} hours"
+                    } else "Recording is off on this camera. Turn it on in camera settings.",
+                    style = MaterialTheme.typography.bodyMedium.merge(TabularNumbers),
+                    color = Slate
+                )
+            }
         }
 
-        if (!loaded) {
-            item { CircularProgressIndicator() }
-        } else if (config == null) {
-            item {
+        when {
+            !loaded -> item {
+                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = LiveTeal)
+                }
+            }
+            !reachable -> item {
                 Text(
-                    "Couldn't read recording settings from ${camera.name}. Update the camera phone to " +
-                        "the latest HomeCam version, and check it is online.",
-                    style = MaterialTheme.typography.bodyMedium
+                    "Couldn't get the list from ${camera.name}. Check it's live, or update HomeCam on the camera phone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Slate
                 )
             }
-        } else {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Record continuously", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Saved on the camera phone. Oldest video is deleted when the limit is reached.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(checked = enabled, onCheckedChange = { enabled = it })
-                }
-            }
-
-            item {
-                Text("Storage limit", style = MaterialTheme.typography.titleMedium)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.horizontalScroll(rememberScrollState())
-                ) {
-                    LIMIT_CHOICES_MB.forEach { mb ->
-                        FilterChip(
-                            selected = limitMb == mb,
-                            onClick = { limitMb = mb },
-                            label = { Text("${mb / 1024} GB") },
-                            enabled = enabled
-                        )
-                    }
-                }
-            }
-
-            item {
-                Text("Quality", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    QUALITY_CHOICES.forEach { (key, label) ->
-                        FilterChip(
-                            selected = quality == key,
-                            onClick = { quality = key },
-                            label = { Text(label) },
-                            enabled = enabled
-                        )
-                    }
-                }
-                val hours = limitMb.toLong() * 1024 * 1024 * 8f / bitrateFor(quality) / 3600f
+            recordings.isEmpty() -> item {
                 Text(
-                    "Keeps about ${String.format(Locale.US, "%.1f", hours)} hours of video. " +
-                        "Used now: ${formatSize(config?.usedBytes ?: 0L)}.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "No recordings yet. The first clip appears 5 minutes after recording starts.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Slate
                 )
             }
-
-            item {
-                Button(
-                    onClick = {
-                        saving = true
-                        scope.launch {
-                            val result = repository.updateRecordingConfig(
-                                camera,
-                                RecordingConfig(enabled = enabled, limitMb = limitMb, quality = quality)
-                            )
-                            saving = false
-                            if (result != null) {
-                                config = result
-                                Toast.makeText(context, "Recording settings saved on ${camera.name}", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Couldn't reach ${camera.name}", Toast.LENGTH_SHORT).show()
+            else -> groups.forEach { (day, clips) ->
+                item(key = "h-$day") {
+                    Text(
+                        day,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Slate,
+                        modifier = Modifier.padding(top = 8.dp, start = 4.dp)
+                    )
+                }
+                item(key = "g-$day") {
+                    Surface(
+                        shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column {
+                            clips.forEachIndexed { i, rec ->
+                                val start = rec.startMillis
+                                val hasMotion = start != null &&
+                                    motionTimes.any { it >= start && it < start + SEGMENT_MS }
+                                ClipRow(
+                                    item = rec,
+                                    hasMotion = hasMotion,
+                                    isDownloading = downloading == rec.name,
+                                    progress = progress,
+                                    onClick = {
+                                        if (rec.inProgress || downloading != null) return@ClipRow
+                                        downloading = rec.name
+                                        progress = 0f
+                                        scope.launch {
+                                            val file = recordingCacheFile(context, rec.name)
+                                            val ok = file.exists() ||
+                                                repository.downloadRecording(camera, rec, file) { progress = it }
+                                            downloading = null
+                                            if (ok) openVideo(context, file)
+                                            else Toast.makeText(context, "Couldn't download this clip", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                                if (i < clips.lastIndex) {
+                                    HorizontalDivider(color = Mist, modifier = Modifier.padding(start = 72.dp))
+                                }
                             }
                         }
-                    },
-                    enabled = !saving,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (saving) "Saving..." else "Save to camera")
-                }
-            }
-
-            item {
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "Recordings (${recordings.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                if (recordings.isEmpty()) {
-                    Text("No recordings yet.", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            items(recordings, key = { it.name }) { rec ->
-                RecordingRow(
-                    item = rec,
-                    isDownloading = downloading == rec.name,
-                    progress = progress,
-                    onClick = {
-                        if (rec.inProgress || downloading != null) return@RecordingRow
-                        downloading = rec.name
-                        progress = 0f
-                        scope.launch {
-                            val file = recordingCacheFile(context, rec.name)
-                            val ok = file.exists() || repository.downloadRecording(camera, rec, file) { progress = it }
-                            downloading = null
-                            if (ok) openVideo(context, file)
-                            else Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
-                        }
                     }
-                )
+                }
             }
         }
 
-        item { Spacer(modifier = Modifier.height(24.dp)) }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
 @Composable
-private fun RecordingRow(
+private fun ClipRow(
     item: RecordingItem,
+    hasMotion: Boolean,
     isDownloading: Boolean,
     progress: Float,
     onClick: () -> Unit
 ) {
     val start = item.startMillis
-    val title = if (start != null) {
-        val end = start + 5 * 60 * 1000L
-        SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(start)) +
-            " – " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(end))
-    } else item.name
+    val hm = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val title = if (start != null) "${hm.format(Date(start))} – ${hm.format(Date(start + SEGMENT_MS))}" else item.name
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !item.inProgress, onClick = onClick)
-            .padding(vertical = 6.dp)
+            .heightIn(min = 64.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (item.inProgress) Icons.Default.FiberManualRecord else Icons.Default.PlayCircle,
-                contentDescription = null,
-                tint = if (item.inProgress) Color(0xFFEF4444) else MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyMedium)
+            // Time block: red while recording, amber with motion, teal otherwise
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        when {
+                            item.inProgress -> RecordRedTint
+                            hasMotion -> AlertAmberTint
+                            else -> LiveTealTint
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (item.inProgress) {
+                    Box(
+                        Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(RecordRed)
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.PlayArrow,
+                        contentDescription = null,
+                        tint = if (hasMotion) AlertAmberDeep else LiveTeal
+                    )
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
                 Text(
-                    if (item.inProgress) "Recording now" else formatSize(item.size),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    title,
+                    style = MaterialTheme.typography.titleSmall.merge(TabularNumbers),
+                    color = InkNavy
                 )
+                Text(
+                    when {
+                        item.inProgress -> "Recording now"
+                        else -> "5 min · ${formatSize(item.size)}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (item.inProgress) RecordRed else Slate
+                )
+            }
+            if (hasMotion && !item.inProgress) {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(AlertAmberTint)
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(AlertAmber)
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text("Motion", style = MaterialTheme.typography.labelSmall, color = AlertAmberDeep)
+                }
             }
         }
         if (isDownloading) {
             LinearProgressIndicator(
                 progress = { progress },
+                color = LiveTeal,
+                trackColor = Mist,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 6.dp)
+                    .padding(top = 8.dp)
             )
         }
     }
+}
+
+/** "Today", "Yesterday", or "Mon 9 Nov" from a clip's start time. */
+private fun dayLabel(millis: Long?): String {
+    if (millis == null) return "Older"
+    val clip = Calendar.getInstance().apply { timeInMillis = millis }
+    val today = Calendar.getInstance()
+    fun sameDay(a: Calendar, b: Calendar) =
+        a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+    if (sameDay(clip, today)) return "Today"
+    today.add(Calendar.DAY_OF_YEAR, -1)
+    if (sameDay(clip, today)) return "Yesterday"
+    return SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(Date(millis))
 }
 
 /** Downloaded segments live in cache/recordings/ (shared with players via FileProvider). */

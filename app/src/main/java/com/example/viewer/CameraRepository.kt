@@ -272,6 +272,14 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
     /** Human-readable reasons the camera couldn't be reached, or null. */
     fun lastError(camera: CameraItem): String? = lastErrors[camera.id]
 
+    /** One route that didn't answer and why, for the "can't connect" screen. */
+    data class RouteFailure(val route: Route, val address: String, val reason: String)
+
+    private val lastFailureList = ConcurrentHashMap<String, List<RouteFailure>>()
+
+    /** Each route's failure from the last check that found nothing, in try order. */
+    fun lastFailures(camera: CameraItem): List<RouteFailure> = lastFailureList[camera.id].orEmpty()
+
     private sealed class Probe {
         class Ok(val ep: Endpoint, val json: JSONObject) : Probe()
         class Failed(val ep: Endpoint, val reason: String) : Probe()
@@ -343,8 +351,12 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
 
         if (winner == null) {
             activeEndpoint.remove(cam.id)
-            val reason = failures
+            val sorted = failures.toList()
                 .sortedBy { f -> endpoints.indexOfFirst { it.baseUrl == f.ep.baseUrl } }
+            lastFailureList[cam.id] = sorted.map {
+                RouteFailure(it.ep.route, it.ep.baseUrl.substringAfter("://"), it.reason)
+            }
+            val reason = sorted
                 .joinToString("\n") { "${it.ep.route.label} (${it.ep.baseUrl.substringAfter("://")}): ${it.reason}" }
                 .ifBlank { "Unreachable" }
             lastErrors[cam.id] = reason
@@ -355,6 +367,7 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
         val json = winner.json
         activeEndpoint[cam.id] = ep
         lastErrors.remove(cam.id)
+        lastFailureList.remove(cam.id)
         learnAddresses(cam, json)
         CameraStatus(
             checked = true,
@@ -400,6 +413,29 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
             }
         }
         if (updated != cam) addCamera(updated)
+    }
+
+    /** Latest picture from the camera for list thumbnails, or null. */
+    suspend fun fetchSnapshot(camera: CameraItem): android.graphics.Bitmap? = withContext(Dispatchers.IO) {
+        try {
+            val cam = latest(camera)
+            val ep = currentEndpoint(cam)
+            val client = ep.client.newBuilder().readTimeout(6, TimeUnit.SECONDS).build()
+            val request = Request.Builder()
+                .url("${ep.baseUrl}/snapshot.jpg")
+                .header("Authorization", "Bearer ${cam.token}")
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val bytes = response.body?.bytes() ?: return@use null
+                // Thumbnails only: decode at a quarter size to save memory
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     suspend fun sendTorchControl(camera: CameraItem, turnOn: Boolean): Boolean =
@@ -539,6 +575,26 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
             }
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /** Times (ms) of recent motion events on the camera, newest first; empty if none or unreachable. */
+    suspend fun fetchMotionTimes(camera: CameraItem): List<Long> = withContext(Dispatchers.IO) {
+        try {
+            val cam = latest(camera)
+            val ep = currentEndpoint(cam)
+            val request = Request.Builder()
+                .url("${ep.baseUrl}/motion")
+                .header("Authorization", "Bearer ${cam.token}")
+                .get()
+                .build()
+            ep.client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use emptyList()
+                val array = JSONArray(response.body?.string().orEmpty())
+                (0 until array.length()).map { array.getJSONObject(it).optLong("timestamp") }.filter { it > 0 }
+            }
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
