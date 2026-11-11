@@ -248,12 +248,26 @@ The debug build signs with `debug.keystore` in the project root (store and key p
 
 ## Releasing
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) runs unit tests and builds the APK on every push to `main` and on every pull request. When you **publish a GitHub Release**, it also:
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs the unit tests and builds a dev APK (`0.0.0-dev.<run>`, kept as an Actions artifact) on every push to `main` and on every pull request. It also creates releases.
 
-1. Sets `versionName` from the tag (`v1.2.0` → `1.2.0`) and `versionCode` from the run number.
-2. Builds the APK and attaches it to the release as `HomeCam-v1.2.0.apk`.
+**Make a release with one click:**
 
-To release: go to **Releases → Draft a new release**, create a tag such as `v1.2.0` on `main`, and click **Publish**. The APK appears under Assets about 5 minutes later.
+1. Open **Actions → Build HomeCam APK → Run workflow**.
+2. Under *Create a release?*, pick **patch** (1.1.1 → 1.1.2), **minor** (1.1.1 → 1.2.0) or **major** (1.1.1 → 2.0.0), or type an exact **version**.
+3. Optionally untick *pre-release*, or add release notes.
+4. Click **Run workflow**.
+
+About 5 minutes later, release `vX.Y.Z` is up with `HomeCam-vX.Y.Z.apk` attached. Its notes list the changes since the previous release. Phones that already have HomeCam are offered the update inside the app.
+
+Other ways that also work:
+
+| You do | Workflow does |
+|---|---|
+| Push a tag: `git tag v1.2.0 && git push origin v1.2.0` | Builds and creates release `v1.2.0` with the APK |
+| Publish a release by hand in the GitHub UI | Builds and attaches the APK to it |
+| Run the workflow with *none* | Only builds a dev APK |
+
+In every case, `versionName` comes from the tag (`v1.2.0` → `1.2.0`) and `versionCode` from the run number, so each build is higher than the last. The workflow refuses to create a release if the version already exists, if the tag doesn't look like `v1.2.3`, or if the signing key secret is missing.
 
 ### Signing key
 
