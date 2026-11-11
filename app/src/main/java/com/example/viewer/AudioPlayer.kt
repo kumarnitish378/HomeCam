@@ -17,7 +17,11 @@ import kotlin.coroutines.coroutineContext
  */
 class AudioPlayer(private val client: OkHttpClient) {
 
-    suspend fun play(audioUrl: String, token: String) = withContext(Dispatchers.IO) {
+    /**
+     * Plays until cancelled or the stream ends. Returns null when the stream simply ended,
+     * or a reason to show the user (e.g. the camera has no microphone permission).
+     */
+    suspend fun play(audioUrl: String, token: String): String? = withContext(Dispatchers.IO) {
         val minBufferSize = AudioTrack.getMinBufferSize(
             16000,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -50,11 +54,17 @@ class AudioPlayer(private val client: OkHttpClient) {
         try {
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
+                val reason = response.body?.string()?.trim().orEmpty()
+                val code = response.code
                 response.close()
-                return@withContext
+                return@withContext when {
+                    reason.isNotEmpty() && code == 503 -> reason
+                    code == 404 -> "Camera phone needs the latest HomeCam for audio"
+                    else -> "Audio failed: HTTP $code"
+                }
             }
 
-            val body = response.body ?: return@withContext
+            val body = response.body ?: return@withContext "Audio failed: empty reply"
             inputStream = body.byteStream()
 
             track.play()
@@ -68,15 +78,24 @@ class AudioPlayer(private val client: OkHttpClient) {
                 headerRead += n
             }
 
+            // 16-bit samples are 2 bytes: a network read can end mid-sample, so only
+            // write whole samples and carry an odd byte over to the next read.
             val buffer = ByteArray(2048)
+            var carry = 0
             while (coroutineContext.isActive) {
-                val read = inputStream.read(buffer, 0, buffer.size)
+                val read = inputStream.read(buffer, carry, buffer.size - carry)
                 if (read < 0) break
-                if (read > 0) {
-                    track.write(buffer, 0, read)
-                }
+                val total = carry + read
+                val whole = total and 1.inv()
+                if (whole > 0) track.write(buffer, 0, whole)
+                carry = total - whole
+                if (carry == 1) buffer[0] = buffer[whole]
             }
-        } catch (_: Exception) {
+            null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null // dropped connection: caller reconnects
         } finally {
             try {
                 inputStream?.close()

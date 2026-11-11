@@ -34,12 +34,23 @@ object AudioStreamer {
 
     val audioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 32)
 
+    /** Why audio can't be served right now, or null if it can. */
+    fun problem(context: Context): String? = when {
+        ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED ->
+            "Microphone permission not given on the camera phone"
+        !FrameBus.serviceHasMic.value ->
+            "Restart the camera on the camera phone to turn on the microphone"
+        else -> null
+    }
+
     @Synchronized
     fun startRecordingIfPermitted(context: Context) {
         if (isRecording.get()) return
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
+            FrameBus.audioError.value = "Microphone permission not given on the camera phone"
             return
         }
 
@@ -58,12 +69,14 @@ object AudioStreamer {
 
             if (record.state != AudioRecord.STATE_INITIALIZED) {
                 record.release()
+                FrameBus.audioError.value = "Microphone could not be opened (is another app using it?)"
                 return
             }
 
             audioRecord = record
             record.startRecording()
             isRecording.set(true)
+            FrameBus.audioError.value = null
 
             recordThread = Thread({
                 val buffer = ByteArray(1024)
@@ -80,7 +93,8 @@ object AudioStreamer {
                 priority = Thread.NORM_PRIORITY
                 start()
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            FrameBus.audioError.value = "Microphone error: ${e.message}"
             stopRecording()
         }
     }

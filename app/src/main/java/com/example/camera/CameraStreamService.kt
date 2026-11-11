@@ -127,6 +127,8 @@ class CameraStreamService : LifecycleService() {
         val micGranted = ContextCompat.checkSelfPermission(
             this, android.Manifest.permission.RECORD_AUDIO
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        FrameBus.serviceHasMic.value = micGranted
+        FrameBus.audioError.value = if (micGranted) null else "Microphone permission not given on the camera phone"
         val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
                 (if (micGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)

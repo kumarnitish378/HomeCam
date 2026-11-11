@@ -133,8 +133,56 @@ fun CameraScreen(
     val recordingError by FrameBus.recordingError.collectAsState()
 
     val config by settingsRepo.cameraConfig.collectAsState(initial = SettingsRepository.CameraConfig())
-
     var token by remember { mutableStateOf("") }
+    val serviceHasMic by FrameBus.serviceHasMic.collectAsState()
+    val audioError by FrameBus.audioError.collectAsState()
+
+    fun micGranted() = ContextCompat.checkSelfPermission(
+        context, android.Manifest.permission.RECORD_AUDIO
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    var micPermission by remember { mutableStateOf(micGranted()) }
+
+    fun startCameraService() {
+        val startIntent = Intent(context, CameraStreamService::class.java).apply {
+            action = CameraStreamService.ACTION_START
+            putExtra(CameraStreamService.EXTRA_TOKEN, token)
+            putExtra(CameraStreamService.EXTRA_PORT, config.port)
+            putExtra(CameraStreamService.EXTRA_CAMERA_NAME, config.cameraName)
+            putExtra(CameraStreamService.EXTRA_TAILSCALE_ONLY, config.tailscaleOnly)
+        }
+        ContextCompat.startForegroundService(context, startIntent)
+    }
+
+    // What to do once the mic permission dialog closes: start, or restart so the
+    // service runs with the microphone foreground type.
+    var afterMicPrompt by remember { mutableStateOf<String?>(null) }
+    val micLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        micPermission = granted
+        when (afterMicPrompt) {
+            "start" -> startCameraService()
+            "restart" -> if (granted) {
+                context.startService(Intent(context, CameraStreamService::class.java).apply {
+                    action = CameraStreamService.ACTION_STOP
+                })
+                coroutineScope.launch {
+                    // wait for the old service to release camera and port
+                    var waited = 0
+                    while (FrameBus.isStreaming.value && waited < 5000) {
+                        delay(100); waited += 100
+                    }
+                    delay(500)
+                    startCameraService()
+                }
+            }
+        }
+        afterMicPrompt = null
+        if (!granted) {
+            Toast.makeText(context, "Without microphone permission, viewers can't hear audio", Toast.LENGTH_LONG).show()
+        }
+    }
+
     var isTokenVisible by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showBatteryOptimizationBanner by remember { mutableStateOf(false) }
@@ -322,14 +370,12 @@ fun CameraScreen(
                     } else {
                         Button(
                             onClick = {
-                                val startIntent = Intent(context, CameraStreamService::class.java).apply {
-                                    action = CameraStreamService.ACTION_START
-                                    putExtra(CameraStreamService.EXTRA_TOKEN, token)
-                                    putExtra(CameraStreamService.EXTRA_PORT, config.port)
-                                    putExtra(CameraStreamService.EXTRA_CAMERA_NAME, config.cameraName)
-                                    putExtra(CameraStreamService.EXTRA_TAILSCALE_ONLY, config.tailscaleOnly)
+                                if (micGranted()) {
+                                    startCameraService()
+                                } else {
+                                    afterMicPrompt = "start"
+                                    micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                                 }
-                                ContextCompat.startForegroundService(context, startIntent)
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary
@@ -575,6 +621,39 @@ fun CameraScreen(
                             fontFamily = if (isTokenVisible) FontFamily.Monospace else FontFamily.Default,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
+
+            // Microphone problem (no permission, or service started before it was granted)
+            if (isStreaming && (!micPermission || !serviceHasMic || audioError != null)) {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Live audio is off", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            when {
+                                !micPermission -> "HomeCam needs microphone permission so viewers can hear this camera."
+                                !serviceHasMic -> "Microphone permission was given after the camera started. Restart to turn audio on."
+                                else -> audioError.orEmpty()
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (!micPermission || !serviceHasMic) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            FilledTonalButton(onClick = {
+                                afterMicPrompt = "restart"
+                                micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                            }) {
+                                Text(if (!micPermission) "Allow microphone & restart" else "Restart camera")
+                            }
+                        }
                     }
                 }
             }

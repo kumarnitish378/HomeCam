@@ -78,6 +78,11 @@ object FrameBus {
     /** elapsedRealtime of the frame in [latest] */
     val latestAt = MutableStateFlow(0L)
 
+    /** True when the service was started with mic permission (foreground type microphone) */
+    val serviceHasMic = MutableStateFlow(false)
+    /** Last microphone problem (no permission, mic busy...), null when fine */
+    val audioError = MutableStateFlow<String?>(null)
+
     /** Last camera error message if any */
     val cameraError = MutableStateFlow<String?>(null)
 }

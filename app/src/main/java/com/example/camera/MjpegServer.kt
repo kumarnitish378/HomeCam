@@ -84,6 +84,12 @@ class MjpegServer(
                         return@get
                     }
 
+                    // Say why instead of streaming endless silence
+                    AudioStreamer.problem(context)?.let { reason ->
+                        call.respondText(reason, ContentType.Text.Plain, HttpStatusCode.ServiceUnavailable)
+                        return@get
+                    }
+
                     call.respondBytesWriter(contentType = ContentType("audio", "wav")) {
                         AudioStreamer.streamTo(this, context)
                     }
@@ -131,6 +137,7 @@ class MjpegServer(
                         append("\"isHeatThrottled\":${FrameBus.isHeatThrottled.value},")
                         append("\"torchOn\":${FrameBus.torchEnabled.value},")
                         append("\"motionEnabled\":${FrameBus.motionEnabled.value},")
+                        append("\"audioProblem\":\"${escapeJson(AudioStreamer.problem(context) ?: FrameBus.audioError.value.orEmpty())}\",")
                         append("\"recording\":${FrameBus.recordingActive.value},")
                         append("\"recordingUsedBytes\":${FrameBus.recordingUsedBytes.value},")
                         append("\"recordingError\":\"${escapeJson(FrameBus.recordingError.value.orEmpty())}\",")

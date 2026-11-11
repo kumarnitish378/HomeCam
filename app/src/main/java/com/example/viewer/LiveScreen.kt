@@ -135,16 +135,22 @@ fun LiveScreen(
     var isAudioEnabled by remember { mutableStateOf(false) }
 
     // Live audio stream player (active only when user enables audio)
-    LaunchedEffect(isAudioEnabled, activeBaseUrl, camera.token) {
-        if (isAudioEnabled) {
+    // Reconnects after a dropped connection; stops and explains when the camera refuses.
+    LaunchedEffect(isAudioEnabled, camera.id) {
+        while (isAudioEnabled) {
             val endpoint = repository.resolveEndpoint(camera)
-            if (endpoint != null) {
-                try {
-                    AudioPlayer(endpoint.streamClient())
-                        .play("${endpoint.baseUrl}/audio.wav", camera.token)
-                } catch (_: Exception) {
-                }
+            if (endpoint == null) {
+                delay(2000)
+                continue
             }
+            val problem = AudioPlayer(endpoint.streamClient())
+                .play("${endpoint.baseUrl}/audio.wav", camera.token)
+            if (problem != null) {
+                Toast.makeText(context, problem, Toast.LENGTH_LONG).show()
+                isAudioEnabled = false
+                break
+            }
+            delay(1000)
         }
     }
 
