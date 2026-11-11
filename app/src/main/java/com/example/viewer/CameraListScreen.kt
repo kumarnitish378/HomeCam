@@ -312,6 +312,8 @@ fun CameraCardItem(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    StreamStateBadge(status)
                 }
 
                 Box {
@@ -387,6 +389,11 @@ fun CameraCardItem(
                 )
             }
 
+            if (status.isOnline) {
+                Spacer(modifier = Modifier.height(6.dp))
+                StreamDetailsRow(status)
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             // Telemetry snippet
@@ -421,9 +428,14 @@ fun CameraCardItem(
                     }
                 } else {
                     Text(
-                        text = status.errorMessage ?: "Offline · Rechecking...",
+                        text = when {
+                            !status.checked -> "Checking camera..."
+                            else -> "Camera not reachable · rechecking every 10 s"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                 }
 
@@ -592,5 +604,47 @@ fun ManualCameraDialog(
                 Text("Cancel")
             }
         }
+    )
+}
+
+/**
+ * LIVE / OFFLINE / CHECKING pill for a camera card. "LIVE" means the camera service is running
+ * and answering, so the stream can be opened right now.
+ */
+@Composable
+fun StreamStateBadge(status: CameraStatus) {
+    val (label, fg, bg) = when {
+        !status.checked -> Triple("CHECKING", MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.surfaceVariant)
+        status.isOnline -> Triple("LIVE", Color(0xFF065F46), Color(0xFFD1FAE5))
+        else -> Triple("OFFLINE", Color(0xFF991B1B), Color(0xFFFEE2E2))
+    }
+    Surface(shape = RoundedCornerShape(6.dp), color = bg) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = fg,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
+/** One line under the address: recording, people watching, last motion. Only when LIVE. */
+@Composable
+fun StreamDetailsRow(status: CameraStatus) {
+    if (!status.isOnline) return
+    val parts = buildList {
+        add(if (status.recording) "● Recording" else "Not recording")
+        add(if (status.viewers == 1) "1 watching" else "${status.viewers} watching")
+        if (!status.motionEnabled) add("Motion off")
+        else if (status.lastMotion > 0) {
+            add("Motion " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                .format(java.util.Date(status.lastMotion)))
+        }
+    }
+    Text(
+        text = parts.joinToString("  ·  "),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (status.recording) Color(0xFFDC2626) else MaterialTheme.colorScheme.onSurfaceVariant
     )
 }

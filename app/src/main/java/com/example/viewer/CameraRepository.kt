@@ -91,6 +91,8 @@ data class Endpoint(
 }
 
 data class CameraStatus(
+    /** False until the first status check for this camera has finished */
+    val checked: Boolean = false,
     val isOnline: Boolean = false,
     val fps: Int = 0,
     val viewers: Int = 0,
@@ -102,6 +104,7 @@ data class CameraStatus(
     val torchOn: Boolean = false,
     val lensFacing: String = "BACK",
     val motionEnabled: Boolean = true,
+    val recording: Boolean = false,
     val route: Route? = null,
     val errorMessage: String? = null
 )
@@ -343,7 +346,7 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
                 .joinToString("\n") { "${it.ep.route.label} (${it.ep.baseUrl.substringAfter("://")}): ${it.reason}" }
                 .ifBlank { "Unreachable" }
             lastErrors[cam.id] = reason
-            return@withContext CameraStatus(isOnline = false, errorMessage = reason)
+            return@withContext CameraStatus(checked = true, isOnline = false, errorMessage = reason)
         }
 
         val ep = winner.ep
@@ -352,6 +355,7 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
         lastErrors.remove(cam.id)
         learnAddresses(cam, json)
         CameraStatus(
+            checked = true,
             isOnline = true,
             fps = json.optInt("fps", 0),
             viewers = json.optInt("viewers", 0),
@@ -363,6 +367,7 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
             torchOn = json.optBoolean("torchOn", false),
             lensFacing = json.optString("lensFacing", "BACK"),
             motionEnabled = json.optBoolean("motionEnabled", true),
+            recording = json.optBoolean("recording", false),
             route = ep.route
         )
     }

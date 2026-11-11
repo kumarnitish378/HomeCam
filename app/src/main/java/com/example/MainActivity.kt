@@ -2,6 +2,7 @@ package com.example
 
 import android.Manifest
 import com.example.update.AppUpdater
+import com.example.camera.FrameBus
 import com.example.update.UpdateHost
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableIntStateOf
@@ -272,6 +273,10 @@ fun MainAppContent(
                 // Initial Mode Selection Screen
                 ModePickerScreen(
                     onCheckUpdates = { updateCheckRequest++ },
+                    onOpenCamera = {
+                        activeMode = "CAMERA"
+                        coroutineScope.launch { settingsRepo.setAppMode("CAMERA") }
+                    },
                     onSelectMode = { selected ->
                         if (selected == "CAMERA") {
                             requestCameraPermissions()
@@ -290,6 +295,7 @@ fun MainAppContent(
 @Composable
 fun ModePickerScreen(
     onCheckUpdates: () -> Unit,
+    onOpenCamera: () -> Unit,
     onSelectMode: (String) -> Unit
 ) {
     Scaffold(
@@ -337,7 +343,12 @@ fun ModePickerScreen(
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Is this phone's camera service running right now?
+            LocalStreamStatusCard(onOpen = onOpenCamera)
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Camera Mode Card
             ModeCard(
@@ -486,6 +497,77 @@ fun ModeCard(
             ) {
                 Text(primaryActionText, fontWeight = FontWeight.SemiBold)
             }
+        }
+    }
+}
+
+/**
+ * Shows whether this phone's camera service is streaming, so it is obvious from the first
+ * screen. The service runs in this app's process, so FrameBus reflects its real state.
+ */
+@Composable
+fun LocalStreamStatusCard(onOpen: () -> Unit) {
+    val streaming by FrameBus.isStreaming.collectAsState()
+    val viewers by FrameBus.activeViewers.collectAsState()
+    val recording by FrameBus.recordingActive.collectAsState()
+    val fps by FrameBus.currentFps.collectAsState()
+    val cameraError by FrameBus.cameraError.collectAsState()
+
+    val (title, detail, color) = when {
+        streaming && cameraError != null -> Triple(
+            "Camera service ON, camera has a problem",
+            cameraError!!,
+            Color(0xFFF59E0B)
+        )
+        streaming -> Triple(
+            "Camera stream is ON on this phone",
+            buildList {
+                add(if (viewers == 1) "1 watching" else "$viewers watching")
+                add(if (recording) "recording" else "not recording")
+                if (fps > 0) add("$fps fps")
+            }.joinToString(" · "),
+            Color(0xFF10B981)
+        )
+        else -> Triple(
+            "Camera stream is OFF on this phone",
+            "Open Camera mode and tap Start to stream from this phone.",
+            Color(0xFF94A3B8)
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = color.copy(alpha = 0.12f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.6f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                if (streaming) "Open" else "Set up",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
