@@ -140,7 +140,10 @@ fun MainAppContent(
     }
 
     fun requestCameraPermissions() {
-        val permissionsToRequest = mutableListOf(Manifest.permission.CAMERA)
+        val permissionsToRequest = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)

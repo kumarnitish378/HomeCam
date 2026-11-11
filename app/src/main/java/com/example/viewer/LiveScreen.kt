@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.VpnLock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
@@ -130,6 +132,21 @@ fun LiveScreen(
     var activeRoute by remember { mutableStateOf<Route?>(null) }
     var activeBaseUrl by remember { mutableStateOf(camera.baseUrl) }
     var connectError by remember { mutableStateOf<String?>(null) }
+    var isAudioEnabled by remember { mutableStateOf(false) }
+
+    // Live audio stream player (active only when user enables audio)
+    LaunchedEffect(isAudioEnabled, activeBaseUrl, camera.token) {
+        if (isAudioEnabled) {
+            val endpoint = repository.resolveEndpoint(camera)
+            if (endpoint != null) {
+                try {
+                    AudioPlayer(endpoint.streamClient())
+                        .play("${endpoint.baseUrl}/audio.wav", camera.token)
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
 
     // Stream frames using MjpegClient. Runs only while screen is active!
     // Each attempt picks the first route that answers (LAN/Tailscale first, then internet),
@@ -435,6 +452,24 @@ fun LiveScreen(
                             if (isTorchOn) Icons.Default.FlashlightOn else Icons.Default.FlashlightOff,
                             contentDescription = "Toggle Torch",
                             tint = if (isTorchOn) Color(0xFFFBBF24) else Color.White
+                        )
+                    }
+
+                    // Live Audio Toggle
+                    IconButton(
+                        onClick = {
+                            isAudioEnabled = !isAudioEnabled
+                            Toast.makeText(
+                                context,
+                                if (isAudioEnabled) "Audio ON" else "Audio Muted",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    ) {
+                        Icon(
+                            if (isAudioEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                            contentDescription = "Toggle Live Audio",
+                            tint = if (isAudioEnabled) MaterialTheme.colorScheme.primary else Color.White
                         )
                     }
 

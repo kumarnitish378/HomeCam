@@ -77,6 +77,18 @@ class MjpegServer(
                     }
                 }
 
+                // Live Audio Streaming endpoint (16kHz 16-bit PCM WAV)
+                get("/audio.wav") {
+                    if (!authorized(call)) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@get
+                    }
+
+                    call.respondBytesWriter(contentType = ContentType("audio", "wav")) {
+                        AudioStreamer.streamTo(this, context)
+                    }
+                }
+
                 // Single snapshot endpoint
                 get("/snapshot.jpg") {
                     if (!authorized(call)) {

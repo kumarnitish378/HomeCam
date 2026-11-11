@@ -548,6 +548,7 @@ class CameraStreamService : LifecycleService() {
         }
 
         try {
+            AudioStreamer.stopRecording()
             server?.stop()
             server = null
         } catch (_: Exception) {
