@@ -68,6 +68,11 @@ class CameraStreamService : LifecycleService() {
     private var remoteProxy: RemoteTlsProxy? = null
     private val recorder by lazy { RollingRecorder(applicationContext) }
     private var recordingEnabled = true
+    /** Set by the watchdog when this camera gives no frames while recording is bound too */
+    private var recordingSuspended = false
+    private var lastBindAt = 0L
+    private var stallCount = 0
+    private var watchdogJob: Job? = null
     private var remoteJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -211,6 +216,15 @@ class CameraStreamService : LifecycleService() {
         observeControlCommands()
 
         // 10. Update notification periodically with viewer count
+        // 11. Watchdog: some phones bind fine but never deliver frames (e.g. front camera
+        //     with recording on). Recover instead of streaming nothing forever.
+        watchdogJob = lifecycleScope.launch {
+            while (true) {
+                delay(3000)
+                checkCameraStall()
+            }
+        }
+
         notificationUpdateJob = lifecycleScope.launch {
             while (true) {
                 delay(5000)
@@ -296,8 +310,53 @@ class CameraStreamService : LifecycleService() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * Called every 3 s. If the camera has given no frame for 6 s since it was bound:
+     * 1st time re-bind, 2nd time re-bind without recording, 3rd time switch front -> back.
+     */
+    private fun checkCameraStall() {
+        if (cameraProvider == null || activeCamera == null) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val lastFrame = maxOf(FrameBus.lastCameraFrameAt.value, lastBindAt)
+        if (now - lastFrame < 6000) {
+            if (FrameBus.lastCameraFrameAt.value > lastBindAt && stallCount > 0) {
+                stallCount = 0 // frames are flowing again
+                if (FrameBus.cameraError.value?.startsWith("No picture") == true) FrameBus.cameraError.value = null
+            }
+            return
+        }
+        stallCount++
+        val lens = if (currentLensFacing == CameraSelector.LENS_FACING_FRONT) "front" else "back"
+        when {
+            stallCount == 1 -> {
+                FrameBus.cameraError.value = "No picture from the $lens camera, restarting it..."
+                bindCameraUseCases()
+            }
+            stallCount == 2 && recordingEnabled && !recordingSuspended -> {
+                recordingSuspended = true
+                FrameBus.cameraError.value =
+                    "The $lens camera can't stream and record together on this phone. Recording paused."
+                bindCameraUseCases()
+            }
+            currentLensFacing == CameraSelector.LENS_FACING_FRONT -> {
+                currentLensFacing = CameraSelector.LENS_FACING_BACK
+                FrameBus.lensFacing.value = "BACK"
+                recordingSuspended = false
+                stallCount = 0
+                FrameBus.cameraError.value = "Front camera gave no picture, switched to the back camera."
+                lifecycleScope.launch { settingsRepo?.updateCameraConfig(lensFacing = "BACK") }
+                bindCameraUseCases()
+            }
+            else -> {
+                FrameBus.cameraError.value = "Camera gives no picture. Close other camera apps or restart the phone."
+                if (stallCount % 10 == 0) bindCameraUseCases() // keep trying now and then
+            }
+        }
+    }
+
     private fun bindCameraUseCases() {
         val provider = cameraProvider ?: return
+        lastBindAt = android.os.SystemClock.elapsedRealtime()
         recorder.detach()
         provider.unbindAll()
 
@@ -329,6 +388,7 @@ class CameraStreamService : LifecycleService() {
             .build()
 
         analysis.setAnalyzer(executor) { imageProxy ->
+            FrameBus.lastCameraFrameAt.value = android.os.SystemClock.elapsedRealtime()
             imageProxy.use { image ->
                 // Stream only on demand: encode JPEGs while a viewer is connected or a
                 // snapshot was asked for. Otherwise just watch for motion at a low rate.
@@ -346,7 +406,7 @@ class CameraStreamService : LifecycleService() {
         }
 
         // Loop recording runs alongside, using the phone's hardware video encoder.
-        val videoCapture = if (recordingEnabled) recorder.createUseCase() else null
+        val videoCapture = if (recordingEnabled && !recordingSuspended) recorder.createUseCase() else null
 
         try {
             FrameBus.recordingError.value = null
@@ -369,7 +429,10 @@ class CameraStreamService : LifecycleService() {
             }
             cameraControl = activeCamera?.cameraControl
             activeCamera?.cameraControl?.enableTorch(FrameBus.torchEnabled.value)
-            FrameBus.cameraError.value = null
+            // Keep watchdog messages (they explain what was changed); clear old bind errors
+            if (stallCount == 0 && FrameBus.cameraError.value?.startsWith("Camera binding failed") == true) {
+                FrameBus.cameraError.value = null
+            }
         } catch (e: Exception) {
             FrameBus.cameraError.value = "Camera binding failed: ${e.message}"
             lifecycleScope.launch {
@@ -396,6 +459,9 @@ class CameraStreamService : LifecycleService() {
                             if (currentLensFacing != CameraSelector.LENS_FACING_FRONT) {
                                 currentLensFacing = CameraSelector.LENS_FACING_FRONT
                                 FrameBus.lensFacing.value = "FRONT"
+                                stallCount = 0
+                                recordingSuspended = false
+                                FrameBus.cameraError.value = null
                                 bindCameraUseCases()
                             }
                         }
@@ -403,6 +469,9 @@ class CameraStreamService : LifecycleService() {
                             if (currentLensFacing != CameraSelector.LENS_FACING_BACK) {
                                 currentLensFacing = CameraSelector.LENS_FACING_BACK
                                 FrameBus.lensFacing.value = "BACK"
+                                stallCount = 0
+                                recordingSuspended = false
+                                FrameBus.cameraError.value = null
                                 bindCameraUseCases()
                             }
                         }
@@ -541,6 +610,7 @@ class CameraStreamService : LifecycleService() {
 
     override fun onDestroy() {
         notificationUpdateJob?.cancel()
+        watchdogJob?.cancel()
         controlCommandsJob?.cancel()
 
         try {

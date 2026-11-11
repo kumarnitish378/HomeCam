@@ -22,10 +22,11 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.writeStringUtf8
-import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import java.io.File
 
 /**
@@ -54,14 +55,22 @@ class MjpegServer(
                         return@get
                     }
 
-                    FrameBus.activeViewers.value++
+                    FrameBus.activeViewers.update { it + 1 } // atomic: viewers connect concurrently
                     try {
                         val multipartType = ContentType("multipart", "x-mixed-replace")
                             .withParameter("boundary", "frame")
 
                         call.respondBytesWriter(contentType = multipartType) {
                             try {
-                                FrameBus.latest.filterNotNull().conflate().collect { jpeg ->
+                                // A gone client is only noticed when we write to it, so never wait
+                                // for a frame forever: after 8 s without one, end the response and let
+                                // the viewer reconnect. Otherwise dead connections pile up as "viewers".
+                                var last: ByteArray? = null
+                                while (true) {
+                                    val jpeg = withTimeoutOrNull(8_000) {
+                                        FrameBus.latest.filterNotNull().first { it !== last }
+                                    } ?: break
+                                    last = jpeg
                                     val header = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.size}\r\n\r\n"
                                     writeStringUtf8(header)
                                     writeFully(jpeg, 0, jpeg.size)
@@ -73,7 +82,7 @@ class MjpegServer(
                             }
                         }
                     } finally {
-                        FrameBus.activeViewers.value = (FrameBus.activeViewers.value - 1).coerceAtLeast(0)
+                        FrameBus.activeViewers.update { (it - 1).coerceAtLeast(0) }
                     }
                 }
 
@@ -137,6 +146,7 @@ class MjpegServer(
                         append("\"isHeatThrottled\":${FrameBus.isHeatThrottled.value},")
                         append("\"torchOn\":${FrameBus.torchEnabled.value},")
                         append("\"motionEnabled\":${FrameBus.motionEnabled.value},")
+                        append("\"cameraError\":\"${escapeJson(FrameBus.cameraError.value.orEmpty())}\",")
                         append("\"audioProblem\":\"${escapeJson(AudioStreamer.problem(context) ?: FrameBus.audioError.value.orEmpty())}\",")
                         append("\"recording\":${FrameBus.recordingActive.value},")
                         append("\"recordingUsedBytes\":${FrameBus.recordingUsedBytes.value},")
@@ -414,7 +424,17 @@ class MjpegServer(
             "\"recording\":${FrameBus.recordingActive.value}}"
     }
 
-    private fun escapeJson(str: String): String {
-        return str.replace("\\", "\\\\").replace("\"", "\\\"")
+    private fun escapeJson(str: String): String = buildString(str.length + 8) {
+        for (c in str) {
+            when {
+                c == '\\' -> append("\\\\")
+                c == '"' -> append("\\\"")
+                c == '\n' -> append("\\n")
+                c == '\r' -> append("\\r")
+                c == '\t' -> append("\\t")
+                c < ' ' -> append(String.format("\\u%04x", c.code))
+                else -> append(c)
+            }
+        }
     }
 }

@@ -333,7 +333,8 @@ fun LiveScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                                connectError?.let { reason ->
+                                // Reachable but no picture: show what the camera phone says
+                                (connectError ?: cameraStatus.cameraError?.let { "Camera phone: $it" })?.let { reason ->
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         reason,

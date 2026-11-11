@@ -83,6 +83,9 @@ object FrameBus {
     /** Last microphone problem (no permission, mic busy...), null when fine */
     val audioError = MutableStateFlow<String?>(null)
 
+    /** elapsedRealtime of the last frame the camera delivered (any rate), for the stall watchdog */
+    val lastCameraFrameAt = MutableStateFlow(0L)
+
     /** Last camera error message if any */
     val cameraError = MutableStateFlow<String?>(null)
 }

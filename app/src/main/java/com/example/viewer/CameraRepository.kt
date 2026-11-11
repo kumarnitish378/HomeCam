@@ -105,6 +105,8 @@ data class CameraStatus(
     val lensFacing: String = "BACK",
     val motionEnabled: Boolean = true,
     val recording: Boolean = false,
+    /** Problem the camera phone reports about its camera (e.g. no picture), or null */
+    val cameraError: String? = null,
     val route: Route? = null,
     val errorMessage: String? = null
 )
@@ -368,6 +370,7 @@ class CameraRepository(private val settingsRepo: SettingsRepository) {
             lensFacing = json.optString("lensFacing", "BACK"),
             motionEnabled = json.optBoolean("motionEnabled", true),
             recording = json.optBoolean("recording", false),
+            cameraError = json.optString("cameraError", "").ifBlank { null },
             route = ep.route
         )
     }
