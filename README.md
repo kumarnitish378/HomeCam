@@ -11,10 +11,23 @@ HomeCam turns an old Android phone into a home CCTV camera, and lets you watch i
 
 **Download:** get the latest APK from [Releases](https://github.com/kumarnitish378/HomeCam/releases/latest).
 
+## Videos
+
+[![HomeCam explained: problem, setup, Tailscale, IPv6 and DuckDNS (9 min)](docs/videos/explainer-poster.jpg)](docs/videos/homecam-explainer.mp4)
+
+**Full walkthrough (9 min):** the problem, how HomeCam solves it, installing and pairing, Tailscale, internet access over IPv6 with DuckDNS, recording and motion detection.
+
+| Quick intro (47 s) | Tailscale setup (69 s) |
+|---|---|
+| [![HomeCam in 47 seconds](docs/videos/reel-poster.jpg)](docs/videos/homecam-reel.mp4) | [![Set up Tailscale for HomeCam](docs/videos/tailscale-reel-poster.jpg)](docs/videos/homecam-tailscale-reel.mp4) |
+
+Click a picture to open the video on GitHub, where it plays in the browser.
+
 ---
 
 ## Contents
 
+- [Videos](#videos)
 - [How it works](#how-it-works)
 - [Install](#install)
 - [Pairing and watching](#pairing-and-watching)
